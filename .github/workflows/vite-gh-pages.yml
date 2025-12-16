@@ -44,10 +44,10 @@ jobs:
       - name: Setup GitHub Pages
         uses: actions/configure-pages@v4
 
-      - name: Upload build artifact
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: ./dist # 关键：指向 Vite 的构建输出目录
+          path: ./dist/
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
