@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Dialog } from '../../components/ui/dialog';
@@ -44,6 +44,15 @@ export default function Editor() {
   // --- 交互状态 ---
   const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
   
+  // 画布拖拽状态
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [isSpacePressed, setIsSpacePressed] = useState(false);
+  const [isPanning, setIsPanning] = useState(false);
+  const panStartRef = useRef<{ x: number, y: number } | null>(null);
+
+  // 播放控制
+  const [globalPlayMode, setGlobalPlayMode] = useState(false);
+  
   // 拖拽状态 & 拖影预览
   const [draggedKeyframe, setDraggedKeyframe] = useState<{ 
       id: string; 
@@ -84,7 +93,35 @@ export default function Editor() {
   }, [project, selectedAnimationId]);
 
   const duration = currentAnimation ? currentAnimation.duration : 5000;
-  const { isPlaying, setIsPlaying, currentTime, setCurrentTime } = useAnimationLoop(duration, isLooping);
+
+  // 播放完成后的回调，用于全局顺序播放
+  const handleAnimationFinish = useCallback(() => {
+      if (!globalPlayMode || !project) return;
+      
+      const currentIndex = project.animations.findIndex(a => a.id === selectedAnimationId);
+      if (currentIndex !== -1 && currentIndex < project.animations.length - 1) {
+          // 播放下一个
+          const nextAnim = project.animations[currentIndex + 1];
+          setSelectedAnimationId(nextAnim.id);
+          // 注意：useAnimationLoop 内部会因为 selectedAnimationId 改变导致 duration 改变
+          // 我们需要重置时间。setCurrentTime 在 hook 外部调用需要小心时机，
+          // 但这里的逻辑是状态更新 -> 重新渲染 -> hook 接收新 duration -> 
+          // 我们可以通过 ref 或者由 hook 内部重置。
+          // 简单起见，我们在切换时手动重置为 0
+          setCurrentTime(0);
+      } else {
+          // 全部播放完毕
+          setIsPlaying(false);
+          setGlobalPlayMode(false);
+          setCurrentTime(0);
+          // 回到第一个
+          if (project.animations.length > 0) {
+              setSelectedAnimationId(project.animations[0].id);
+          }
+      }
+  }, [globalPlayMode, project, selectedAnimationId]);
+
+  const { isPlaying, setIsPlaying, currentTime, setCurrentTime } = useAnimationLoop(duration, isLooping, handleAnimationFinish);
 
   const currentKeyframe = useMemo(() => {
       return currentAnimation?.keyframes.find(k => k.id === selectedKeyframeId);
@@ -99,6 +136,16 @@ export default function Editor() {
         navigate('/');
         return;
     }
+    
+    // 兼容性处理：如果旧数据叫"主动画"，可以在这里改名，或者不改
+    // 这里只初始化 history
+    if (proj.animations.length === 0) {
+        proj.animations.push({ id: generateId(), name: '灯效 1', keyframes: [], duration: 5000 });
+    } else {
+         // 确保有名字
+         proj.animations.forEach((a, i) => { if (a.name === '主动画') a.name = `灯效 ${i + 1}`; });
+    }
+
     initHistory(proj); 
     setTemplates(data.templates);
     
@@ -150,10 +197,25 @@ export default function Editor() {
                   handleDeleteKeyframe();
               }
           }
+          if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLInputElement)) {
+             e.preventDefault(); // 防止页面滚动
+             setIsSpacePressed(true);
+          }
+      };
+      
+      const handleKeyUp = (e: KeyboardEvent) => {
+         if (e.code === 'Space') {
+             setIsSpacePressed(false);
+             setIsPanning(false);
+         }
       };
 
       window.addEventListener('keydown', handleKeyDown);
-      return () => window.removeEventListener('keydown', handleKeyDown);
+      window.addEventListener('keyup', handleKeyUp);
+      return () => {
+          window.removeEventListener('keydown', handleKeyDown);
+          window.removeEventListener('keyup', handleKeyUp);
+      };
   }, [undo, redo, selectedKeyframeId, project]); 
 
   // --- 播放逻辑 ---
@@ -166,22 +228,42 @@ export default function Editor() {
   // --- 交互逻辑 (鼠标移动 / 抬起) ---
   useEffect(() => {
       const handleMouseMove = (e: MouseEvent) => {
+          // 0. 画布拖拽逻辑
+          if (isPanning && panStartRef.current) {
+              const dx = e.clientX - panStartRef.current.x;
+              const dy = e.clientY - panStartRef.current.y;
+              setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
+              panStartRef.current = { x: e.clientX, y: e.clientY };
+              return; // 拖拽时不处理其他逻辑
+          }
+
           // 1. 框选逻辑
-          if (selectionStartRef.current && previewRef.current) {
+          if (selectionStartRef.current && previewRef.current && !isSpacePressed) {
               const rect = previewRef.current.getBoundingClientRect();
               const scale = previewZoom; 
               
-              const currentX = (e.clientX - rect.left) / scale;
-              const currentY = (e.clientY - rect.top) / scale;
+              // 框选坐标需要减去 pan 的偏移量，因为节点是平移过的
+              const currentX = (e.clientX - rect.left) / scale - (pan.x / scale);
+              const currentY = (e.clientY - rect.top) / scale - (pan.y / scale);
               const startX = selectionStartRef.current.x; 
               const startY = selectionStartRef.current.y;
               
+              // 计算选框矩形 (逻辑坐标)
               const newBox = {
                   x: Math.min(startX, currentX),
                   y: Math.min(startY, currentY),
                   w: Math.abs(currentX - startX),
                   h: Math.abs(currentY - startY)
               };
+              
+              // 视觉上的选框需要加回 pan，因为选框div是绝对定位在容器内的，而容器被 transform 了
+              // 这里我们需要注意：PreviewArea 里的 selectionBox 渲染是在 container 内部还是外部？
+              // 查看代码：selectionBox 是渲染在 container 内部的。所以它的坐标应该是逻辑坐标。
+              // 但是 container 已经应用了 pan。
+              // 如果 startX 是基于无 pan 的坐标系的，那么 newBox 也是。
+              // 当 container 移动了，selectionBox 作为子元素也会移动。
+              // 所以这里的计算必须统一。
+              // 修正：selectionStartRef 在 MouseDown 时记录的是 logic 坐标 (考虑了 pan)。
               setSelectionBox(newBox);
               
               if (lightGroup) {
@@ -190,8 +272,10 @@ export default function Editor() {
                   const contentHeight = rect.height / scale;
 
                   lightGroup.nodes.forEach(node => {
+                      // 节点的 x,y 是百分比
                       const nodeX = (node.x / 100) * contentWidth;
                       const nodeY = (node.y / 100) * contentHeight;
+                      
                       if (nodeX >= newBox.x && nodeX <= newBox.x + newBox.w &&
                           nodeY >= newBox.y && nodeY <= newBox.y + newBox.h) {
                           boxSelectedIds.add(node.id);
@@ -225,13 +309,10 @@ export default function Editor() {
 
               // --- 碰撞检测与吸附逻辑 ---
               const duration = draggedKeyframe.duration;
-              // 找到目标轨道上的其他关键帧 (排除自己)
               const siblings = currentAnimation.keyframes.filter(k => 
                   k.id !== draggedKeyframe.id && k.trackId === newTrackId
               );
 
-              // 查找是否发生重叠
-              // 重叠条件: !(dragEnd <= siblingStart || dragStart >= siblingEnd)
               const collision = siblings.find(k => {
                   const kEnd = k.startTime + k.duration;
                   const dragEnd = newStartTime + duration;
@@ -239,15 +320,10 @@ export default function Editor() {
               });
 
               if (collision) {
-                  // 如果发生碰撞，计算吸附位置
                   const kEnd = collision.startTime + collision.duration;
-                  
-                  // 选项 A: 吸附到碰撞物体的前面
                   const snapBefore = collision.startTime - duration;
-                  // 选项 B: 吸附到碰撞物体的后面
                   const snapAfter = kEnd;
 
-                  // 比较哪个位置离当前鼠标计算出的位置更近
                   if (Math.abs(newStartTime - snapBefore) < Math.abs(newStartTime - snapAfter)) {
                       newStartTime = snapBefore;
                   } else {
@@ -255,7 +331,6 @@ export default function Editor() {
                   }
               }
               
-              // 再次确保不小于 0 (因为吸附到前面可能导致负值)
               newStartTime = Math.max(0, newStartTime);
 
               setDragGhost({
@@ -267,6 +342,11 @@ export default function Editor() {
       };
 
       const handleMouseUp = (e: MouseEvent) => {
+          if (isPanning) {
+              setIsPanning(false);
+              panStartRef.current = null;
+          }
+
           if (selectionStartRef.current) {
               selectionStartRef.current = null;
               setSelectionBox(null);
@@ -301,7 +381,7 @@ export default function Editor() {
           window.removeEventListener('mousemove', handleMouseMove);
           window.removeEventListener('mouseup', handleMouseUp);
       };
-  }, [draggedKeyframe, dragGhost, project, currentAnimation, selectedAnimationId, timelineZoom, previewZoom, lightGroup]);
+  }, [draggedKeyframe, dragGhost, project, currentAnimation, selectedAnimationId, timelineZoom, previewZoom, lightGroup, isSpacePressed, isPanning, pan]);
 
   // --- 事件处理 ---
   
@@ -317,12 +397,30 @@ export default function Editor() {
   const handlePreviewMouseDown = (e: React.MouseEvent) => {
       if (!previewRef.current) return;
       
+      // 如果按住了空格，开始拖拽画布
+      if (isSpacePressed) {
+          setIsPanning(true);
+          panStartRef.current = { x: e.clientX, y: e.clientY };
+          return;
+      }
+
       const rect = previewRef.current.getBoundingClientRect();
-      const x = (e.clientX - rect.left) / previewZoom;
-      const y = (e.clientY - rect.top) / previewZoom;
+      // 计算逻辑坐标 (Logic Coords) = (Mouse - Offset) / Scale - Pan
+      // 这里的 Pan 需要除以 Scale，因为 Scale 是应用在 Pan 之外的 (transform: scale() translate()) 
+      // 或者 transform: translate() scale()。
+      // 在 PreviewArea 实现中是 scale(zoom) translate(pan)。
+      // 也就是说 pan 是在缩放后的坐标系里的位移？不，PreviewArea 写的是 `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)`
+      // CSS transform order matters. Scale affects Translate if Scale is first.
+      // `scale(2) translate(10px)` moves visually by 20px.
+      // So logic coord X = (MouseX - RectLeft) / Scale - PanX
       
-      selectionStartRef.current = { x, y };
-      setSelectionBox({ x, y, w: 0, h: 0 });
+      const mouseX = (e.clientX - rect.left) / previewZoom;
+      const mouseY = (e.clientY - rect.top) / previewZoom;
+      const startX = mouseX - (pan.x);
+      const startY = mouseY - (pan.y);
+      
+      selectionStartRef.current = { x: startX, y: startY };
+      setSelectionBox({ x: startX, y: startY, w: 0, h: 0 });
 
       if (e.shiftKey || e.altKey) {
           initialSelectionRef.current = new Set(selectedLightIds);
@@ -362,8 +460,18 @@ export default function Editor() {
           trackId: k.trackId,
           duration: k.duration
       });
+      // 3. 点击动画关键帧时，自动选中关联的灯珠
       setSelectedKeyframeId(k.id);
+      setSelectedLightIds(new Set(k.targetLightIds));
   };
+
+  const handleSelectKeyframe = (id: string) => {
+      setSelectedKeyframeId(id);
+      const kf = currentAnimation?.keyframes.find(k => k.id === id);
+      if (kf) {
+          setSelectedLightIds(new Set(kf.targetLightIds));
+      }
+  }
 
   const handleSaveSelection = () => {
       if (selectedLightIds.size === 0 || !project) {
@@ -412,7 +520,10 @@ export default function Editor() {
   };
 
   const handleAddKeyframe = (type: string) => {
-      if (!currentAnimation || !project || selectedLightIds.size === 0) return;
+      if (!currentAnimation || !project || selectedLightIds.size === 0) {
+          if (selectedLightIds.size === 0) toast("请先选择灯珠", "error");
+          return;
+      }
 
       const newKeyframe: Keyframe = {
           id: generateId(),
@@ -450,7 +561,82 @@ export default function Editor() {
       };
 
       updateProject(updatedProject);
-      setIsPlaying(true); 
+      
+      // 新增后选中该关键帧
+      setSelectedKeyframeId(newKeyframe.id);
+  };
+
+  // --- Animation Management ---
+  const handleAddAnimation = () => {
+      if (!project) return;
+      const newAnimName = `灯效 ${project.animations.length + 1}`;
+      const newAnim = { id: generateId(), name: newAnimName, keyframes: [], duration: 5000 };
+      updateProject({
+          ...project,
+          animations: [...project.animations, newAnim]
+      });
+      setSelectedAnimationId(newAnim.id);
+      toast("已添加新灯效");
+  };
+
+  const handleRenameAnimation = (id: string, newName: string) => {
+      if (!project) return;
+      updateProject({
+          ...project,
+          animations: project.animations.map(a => a.id === id ? { ...a, name: newName } : a)
+      });
+  };
+
+  const handleDeleteAnimation = (id: string) => {
+      if (!project) return;
+      if (project.animations.length <= 1) {
+          toast("至少保留一个灯效", "error");
+          return;
+      }
+      setConfirmDialog({
+          isOpen: true,
+          title: "删除灯效",
+          message: "确定删除此灯效？无法撤销。",
+          onConfirm: () => {
+            const newAnims = project.animations.filter(a => a.id !== id);
+            updateProject({
+                ...project,
+                animations: newAnims
+            });
+            if (selectedAnimationId === id) {
+                setSelectedAnimationId(newAnims[0].id);
+            }
+            toast("灯效已删除");
+          }
+      });
+  };
+
+  const handleReorderAnimations = (dragIdx: number, dropIdx: number) => {
+      if (!project) return;
+      const items = Array.from(project.animations);
+      const [reorderedItem] = items.splice(dragIdx, 1);
+      items.splice(dropIdx, 0, reorderedItem);
+      updateProject({ ...project, animations: items });
+  };
+  
+  const handleSaveAnimAsTemplate = (id: string) => {
+      if (!project) return;
+      const anim = project.animations.find(a => a.id === id);
+      if (!anim) return;
+      
+      const newTemplate: Template = {
+          id: generateId(),
+          name: anim.name + " (Template)",
+          createdAt: Date.now(),
+          keyframes: anim.keyframes.map(k => ({...k})), 
+          lightGroupId: project.lightGroupId
+      };
+      
+      const data = getStorageData();
+      data.templates.push(newTemplate);
+      saveStorageData(data);
+      setTemplates(data.templates);
+      toast("灯效已保存为模板", "success");
   };
 
   const handleApplyTemplate = (template: Template) => {
@@ -617,12 +803,15 @@ export default function Editor() {
             selectedLightIds={selectedLightIds}
             selectionBox={selectionBox}
             zoom={previewZoom}
+            pan={pan}
+            isSpacePressed={isSpacePressed}
             onZoomChange={setPreviewZoom}
             getLightStyle={getLightStyleReal}
             onMouseDown={handlePreviewMouseDown}
             onLightClick={handleLightClick}
             onClearSelection={() => setSelectedLightIds(new Set())}
             onSaveSelection={handleSaveSelection}
+            onCreateAnimation={() => handleAddKeyframe('fade')}
           />
           
           <Inspector 
@@ -647,16 +836,43 @@ export default function Editor() {
         canUndo={canUndo}
         canRedo={canRedo}
         dragGhost={dragGhost}
-        onPlayPause={() => setIsPlaying(!isPlaying)}
-        onStop={() => { setIsPlaying(false); setCurrentTime(0); }}
+        onPlayPause={() => {
+            // 全局顺序播放
+            if (isPlaying && globalPlayMode) {
+                setIsPlaying(false);
+                setGlobalPlayMode(false);
+            } else {
+                setGlobalPlayMode(true);
+                // 如果当前不是第一个，且时间为0，从第一个开始？或者从当前开始？
+                // 需求："整个工程的播放按钮是把所有的灯效按从上往下的顺序播放"
+                // 通常意味着从头开始，或者从当前选中的灯效开始播放直到结束。
+                // 简单起见，如果当前不在播放，我们从当前选中的灯效开始
+                setIsPlaying(true);
+            }
+        }}
+        onStop={() => { setIsPlaying(false); setGlobalPlayMode(false); setCurrentTime(0); }}
         onLoopToggle={() => setIsLooping(!isLooping)}
         onZoomChange={setTimelineZoom}
         onSelectAnimation={setSelectedAnimationId}
-        onSelectKeyframe={setSelectedKeyframeId}
+        onSelectKeyframe={handleSelectKeyframe}
         onKeyframeMouseDown={handleKeyframeMouseDown}
         onTimelineClick={handleTimelineClick}
         onUndo={undo}
         onRedo={redo}
+        onAddAnimation={handleAddAnimation}
+        onRenameAnimation={handleRenameAnimation}
+        onDeleteAnimation={handleDeleteAnimation}
+        onSaveAnimationAsTemplate={handleSaveAnimAsTemplate}
+        onReorderAnimations={handleReorderAnimations}
+        onPlaySingleAnimation={(id) => {
+            // 单独播放
+            if (selectedAnimationId !== id) {
+                setSelectedAnimationId(id);
+                setCurrentTime(0);
+            }
+            setGlobalPlayMode(false); // 强制退出全局模式
+            setIsPlaying(!isPlaying);
+        }}
       />
 
       <Dialog 
@@ -673,7 +889,7 @@ export default function Editor() {
 
       <Dialog
         isOpen={isSaveSelectionOpen}
-        onClose={() => setIsSaveSelectionOpen(false)}
+        onClose={() => setIsSaveSelectionOpen(false)} 
         title="保存选区"
         footer={
             <>
