@@ -1,7 +1,7 @@
 name: Deploy Vite React to Pages
 on:
   push:
-    branches: [main]
+    branches: [gh-page]
 permissions:
   contents: read
   pages: write
