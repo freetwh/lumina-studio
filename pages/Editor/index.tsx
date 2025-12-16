@@ -23,6 +23,13 @@ import { Timeline } from './components/Timeline';
 const PIXELS_PER_SEC = 100;
 const TRACK_HEIGHT = 40;
 
+// 辅助函数：计算动画时长
+const calculateDuration = (keyframes: Keyframe[]) => {
+    if (!keyframes || keyframes.length === 0) return 2000;
+    const end = Math.max(0, ...keyframes.map(k => k.startTime + k.duration));
+    return Math.max(end, 2000);
+};
+
 export default function Editor() {
   const { projectId } = useParams();
   const navigate = useNavigate();
@@ -66,6 +73,7 @@ export default function Editor() {
   const [dragGhost, setDragGhost] = useState<{ startTime: number; trackId: number; duration: number } | null>(null);
   
   // --- Refs ---
+  // previewRef 指向 PreviewArea 内部实际承载 Grid 的 DOM 元素 (应用了样式宽高的那个)
   const previewRef = useRef<HTMLDivElement>(null);
   const selectionStartRef = useRef<{ x: number; y: number } | null>(null); 
   const initialSelectionRef = useRef<Set<string>>(new Set()); 
@@ -103,11 +111,6 @@ export default function Editor() {
           // 播放下一个
           const nextAnim = project.animations[currentIndex + 1];
           setSelectedAnimationId(nextAnim.id);
-          // 注意：useAnimationLoop 内部会因为 selectedAnimationId 改变导致 duration 改变
-          // 我们需要重置时间。setCurrentTime 在 hook 外部调用需要小心时机，
-          // 但这里的逻辑是状态更新 -> 重新渲染 -> hook 接收新 duration -> 
-          // 我们可以通过 ref 或者由 hook 内部重置。
-          // 简单起见，我们在切换时手动重置为 0
           setCurrentTime(0);
       } else {
           // 全部播放完毕
@@ -137,12 +140,9 @@ export default function Editor() {
         return;
     }
     
-    // 兼容性处理：如果旧数据叫"主动画"，可以在这里改名，或者不改
-    // 这里只初始化 history
     if (proj.animations.length === 0) {
         proj.animations.push({ id: generateId(), name: '灯效 1', keyframes: [], duration: 5000 });
     } else {
-         // 确保有名字
          proj.animations.forEach((a, i) => { if (a.name === '主动画') a.name = `灯效 ${i + 1}`; });
     }
 
@@ -155,10 +155,8 @@ export default function Editor() {
         setLightGroup(grp);
     } else {
         if (data.lightGroups.length > 0) {
-            console.warn(`未找到灯组 ${proj.lightGroupId}，回退到默认。`);
             setLightGroup(data.lightGroups[0]);
         } else {
-            console.error("无可用灯组。");
             setLightGroup(null);
         }
     }
@@ -168,7 +166,6 @@ export default function Editor() {
     }
   }, [projectId, navigate, initHistory]);
 
-  // 保存工程辅助函数
   const updateProject = (updatedProject: Project) => {
       setProjectHistory(updatedProject); 
       
@@ -198,7 +195,7 @@ export default function Editor() {
               }
           }
           if (e.code === 'Space' && !e.repeat && !(e.target instanceof HTMLInputElement)) {
-             e.preventDefault(); // 防止页面滚动
+             e.preventDefault(); 
              setIsSpacePressed(true);
           }
       };
@@ -218,7 +215,7 @@ export default function Editor() {
       };
   }, [undo, redo, selectedKeyframeId, project]); 
 
-  // --- 播放逻辑 ---
+  // --- 播放时点击清空选区 ---
   useEffect(() => {
     if (isPlaying) {
         setSelectedLightIds(new Set());
@@ -228,51 +225,54 @@ export default function Editor() {
   // --- 交互逻辑 (鼠标移动 / 抬起) ---
   useEffect(() => {
       const handleMouseMove = (e: MouseEvent) => {
-          // 0. 画布拖拽逻辑
+          // 0. 画布拖拽逻辑 (Screen Space 1:1)
           if (isPanning && panStartRef.current) {
               const dx = e.clientX - panStartRef.current.x;
               const dy = e.clientY - panStartRef.current.y;
               setPan(prev => ({ x: prev.x + dx, y: prev.y + dy }));
               panStartRef.current = { x: e.clientX, y: e.clientY };
-              return; // 拖拽时不处理其他逻辑
+              return; 
           }
 
-          // 1. 框选逻辑
+          // 1. 框选逻辑 (基于实际 DOM 渲染位置计算)
           if (selectionStartRef.current && previewRef.current && !isSpacePressed) {
+              // 获取 Grid 容器在屏幕上的实际位置和尺寸
+              // 这个 Rect 已经包含了 transform (scale + translate) 的所有影响
               const rect = previewRef.current.getBoundingClientRect();
-              const scale = previewZoom; 
               
-              // 框选坐标需要减去 pan 的偏移量，因为节点是平移过的
-              const currentX = (e.clientX - rect.left) / scale - (pan.x / scale);
-              const currentY = (e.clientY - rect.top) / scale - (pan.y / scale);
+              // 我们的内部坐标系是基于 style.width/height 定义的（例如 300x600）
+              // getBoundingClientRect 拿到的是缩放后的 px
+              // 需要计算当前的实际缩放比例
+              const internalWidth = parseFloat(previewRef.current.style.width) || 1;
+              const internalHeight = parseFloat(previewRef.current.style.height) || 1;
+              
+              const scaleX = rect.width / internalWidth;
+              const scaleY = rect.height / internalHeight;
+
+              // 计算鼠标相对于 Grid 左上角的坐标 (Local Space Pixels)
+              const localX = (e.clientX - rect.left) / scaleX;
+              const localY = (e.clientY - rect.top) / scaleY;
+
               const startX = selectionStartRef.current.x; 
               const startY = selectionStartRef.current.y;
               
-              // 计算选框矩形 (逻辑坐标)
               const newBox = {
-                  x: Math.min(startX, currentX),
-                  y: Math.min(startY, currentY),
-                  w: Math.abs(currentX - startX),
-                  h: Math.abs(currentY - startY)
+                  x: Math.min(startX, localX),
+                  y: Math.min(startY, localY),
+                  w: Math.abs(localX - startX),
+                  h: Math.abs(localY - startY)
               };
               
-              // 视觉上的选框需要加回 pan，因为选框div是绝对定位在容器内的，而容器被 transform 了
-              // 这里我们需要注意：PreviewArea 里的 selectionBox 渲染是在 container 内部还是外部？
-              // 查看代码：selectionBox 是渲染在 container 内部的。所以它的坐标应该是逻辑坐标。
-              // 但是 container 已经应用了 pan。
-              // 如果 startX 是基于无 pan 的坐标系的，那么 newBox 也是。
-              // 当 container 移动了，selectionBox 作为子元素也会移动。
-              // 所以这里的计算必须统一。
-              // 修正：selectionStartRef 在 MouseDown 时记录的是 logic 坐标 (考虑了 pan)。
               setSelectionBox(newBox);
               
               if (lightGroup) {
                   const boxSelectedIds = new Set<string>();
-                  const contentWidth = rect.width / scale;
-                  const contentHeight = rect.height / scale;
+                  
+                  // 使用 internalWidth/Height 来计算节点的像素位置进行碰撞检测
+                  const contentWidth = internalWidth;
+                  const contentHeight = internalHeight;
 
                   lightGroup.nodes.forEach(node => {
-                      // 节点的 x,y 是百分比
                       const nodeX = (node.x / 100) * contentWidth;
                       const nodeY = (node.y / 100) * contentHeight;
                       
@@ -307,7 +307,6 @@ export default function Editor() {
               const trackDelta = Math.round(deltaY / TRACK_HEIGHT);
               const newTrackId = Math.max(0, Math.min(5, draggedKeyframe.initialTrackId + trackDelta));
 
-              // --- 碰撞检测与吸附逻辑 ---
               const duration = draggedKeyframe.duration;
               const siblings = currentAnimation.keyframes.filter(k => 
                   k.id !== draggedKeyframe.id && k.trackId === newTrackId
@@ -358,8 +357,7 @@ export default function Editor() {
               );
               
               const updatedAnim = { ...currentAnimation, keyframes: updatedKeyframes };
-              const maxDur = Math.max(...updatedKeyframes.map(k => k.startTime + k.duration), currentAnimation.duration);
-              updatedAnim.duration = maxDur;
+              updatedAnim.duration = calculateDuration(updatedKeyframes);
               
               const updatedProject = {
                   ...project,
@@ -397,27 +395,27 @@ export default function Editor() {
   const handlePreviewMouseDown = (e: React.MouseEvent) => {
       if (!previewRef.current) return;
       
-      // 如果按住了空格，开始拖拽画布
       if (isSpacePressed) {
           setIsPanning(true);
           panStartRef.current = { x: e.clientX, y: e.clientY };
           return;
       }
-
-      const rect = previewRef.current.getBoundingClientRect();
-      // 计算逻辑坐标 (Logic Coords) = (Mouse - Offset) / Scale - Pan
-      // 这里的 Pan 需要除以 Scale，因为 Scale 是应用在 Pan 之外的 (transform: scale() translate()) 
-      // 或者 transform: translate() scale()。
-      // 在 PreviewArea 实现中是 scale(zoom) translate(pan)。
-      // 也就是说 pan 是在缩放后的坐标系里的位移？不，PreviewArea 写的是 `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)`
-      // CSS transform order matters. Scale affects Translate if Scale is first.
-      // `scale(2) translate(10px)` moves visually by 20px.
-      // So logic coord X = (MouseX - RectLeft) / Scale - PanX
       
-      const mouseX = (e.clientX - rect.left) / previewZoom;
-      const mouseY = (e.clientY - rect.top) / previewZoom;
-      const startX = mouseX - (pan.x);
-      const startY = mouseY - (pan.y);
+      // 防止 Alt 键触发浏览器默认行为（如窗口菜单）
+      if (e.altKey) e.preventDefault();
+
+      // 获取当前视口的实际边界（包含缩放和平移）
+      const rect = previewRef.current.getBoundingClientRect();
+      
+      const internalWidth = parseFloat(previewRef.current.style.width) || 1;
+      const internalHeight = parseFloat(previewRef.current.style.height) || 1;
+      
+      const scaleX = rect.width / internalWidth;
+      const scaleY = rect.height / internalHeight;
+      
+      // 计算相对于内部坐标系的位置
+      const startX = (e.clientX - rect.left) / scaleX;
+      const startY = (e.clientY - rect.top) / scaleY;
       
       selectionStartRef.current = { x: startX, y: startY };
       setSelectionBox({ x: startX, y: startY, w: 0, h: 0 });
@@ -432,6 +430,8 @@ export default function Editor() {
 
   const handleLightClick = (e: React.MouseEvent, id: string) => {
       e.stopPropagation();
+      if (e.altKey) e.preventDefault(); // 防止默认行为
+      
       setSelectedLightIds(prev => {
           const next = new Set(prev);
           if (e.shiftKey) {
@@ -460,7 +460,6 @@ export default function Editor() {
           trackId: k.trackId,
           duration: k.duration
       });
-      // 3. 点击动画关键帧时，自动选中关联的灯珠
       setSelectedKeyframeId(k.id);
       setSelectedLightIds(new Set(k.targetLightIds));
   };
@@ -551,9 +550,7 @@ export default function Editor() {
           ...currentAnimation,
           keyframes: [...currentAnimation.keyframes, newKeyframe]
       };
-      
-      const end = newKeyframe.startTime + newKeyframe.duration;
-      if (end > updatedAnim.duration) updatedAnim.duration = end;
+      updatedAnim.duration = calculateDuration(updatedAnim.keyframes);
 
       const updatedProject = {
           ...project,
@@ -561,8 +558,6 @@ export default function Editor() {
       };
 
       updateProject(updatedProject);
-      
-      // 新增后选中该关键帧
       setSelectedKeyframeId(newKeyframe.id);
   };
 
@@ -651,8 +646,7 @@ export default function Editor() {
                 ...currentAnimation,
                 keyframes: template.keyframes.map(k => ({...k, id: generateId()})), 
             };
-            const maxDur = Math.max(...updatedAnim.keyframes.map(k => k.startTime + k.duration), 5000);
-            updatedAnim.duration = maxDur;
+            updatedAnim.duration = calculateDuration(updatedAnim.keyframes);
 
             const updatedProject = {
                 ...project,
@@ -689,8 +683,7 @@ export default function Editor() {
            k.id === kfId ? { ...k, ...updates } : k
        );
        const updatedAnim = { ...currentAnimation, keyframes: updatedKeyframes };
-       const maxDur = Math.max(...updatedKeyframes.map(k => k.startTime + k.duration), currentAnimation.duration);
-       updatedAnim.duration = maxDur;
+       updatedAnim.duration = calculateDuration(updatedKeyframes);
 
        const updatedProject = {
            ...project,
@@ -713,6 +706,8 @@ export default function Editor() {
       });
 
       const updatedAnim = { ...currentAnimation, keyframes: remainingKeyframes };
+      updatedAnim.duration = calculateDuration(remainingKeyframes);
+
       const updatedProject = {
            ...project,
            animations: project.animations.map(a => a.id === selectedAnimationId ? updatedAnim : a)
@@ -733,6 +728,8 @@ export default function Editor() {
       };
       
       const updatedAnim = { ...currentAnimation, keyframes: [...currentAnimation.keyframes, newKf] };
+      updatedAnim.duration = calculateDuration(updatedAnim.keyframes);
+      
       const updatedProject = {
            ...project,
            animations: project.animations.map(a => a.id === selectedAnimationId ? updatedAnim : a)
@@ -740,6 +737,7 @@ export default function Editor() {
       updateProject(updatedProject);
   };
 
+  // --- 重写的灯光渲染逻辑 ---
   const getLightStyleReal = (nodeId: string) => {
       const baseR = 51; 
       const baseG = 51;
@@ -747,34 +745,43 @@ export default function Editor() {
       const defaultStyle = { backgroundColor: `rgb(${baseR},${baseG},${baseB})`, boxShadow: 'none' };
       if (!currentAnimation) return defaultStyle; 
       
-      let keyframesToRender = currentAnimation.keyframes;
-
-      const activeFrame = keyframesToRender.find(k => 
+      // 1. 查找所有作用于当前节点且处于时间范围内的关键帧
+      // 使用 < (startTime + duration) 确保如果一个动画在1000ms结束，另一个在1000ms开始，不会产生闪烁或双重计算
+      const activeFrames = currentAnimation.keyframes.filter(k => 
           k.targetLightIds.includes(nodeId) && 
           currentTime >= k.startTime && 
-          currentTime <= (k.startTime + k.duration)
+          currentTime < (k.startTime + k.duration)
       );
 
-      if (activeFrame) {
-          const progress = (currentTime - activeFrame.startTime) / activeFrame.duration;
-          const p = Math.min(Math.max(progress, 0), 1);
-          const fromColor = hexToRgb(activeFrame.fromState.color);
-          const toColor = hexToRgb(activeFrame.toState.color);
-          const frameR = lerp(fromColor.r, toColor.r, p);
-          const frameG = lerp(fromColor.g, toColor.g, p);
-          const frameB = lerp(fromColor.b, toColor.b, p);
-          const fromBright = activeFrame.fromState.brightness ?? 0;
-          const toBright = activeFrame.toState.brightness ?? 1;
-          const brightness = lerp(fromBright, toBright, p);
-          const r = Math.round(lerp(baseR, frameR, brightness));
-          const g = Math.round(lerp(baseG, frameG, brightness));
-          const b = Math.round(lerp(baseB, frameB, brightness));
-          return {
-              backgroundColor: `rgb(${r},${g},${b})`,
-              boxShadow: brightness > 0.1 ? `0 0 ${15 * brightness}px rgba(${frameR},${frameG},${frameB}, ${0.8 * brightness})` : 'none'
-          };
+      // 2. 如果没有任何活跃的动画帧，返回默认样式（灭灯状态）
+      // 这自然地实现了"播放完自动移除/重置"的需求
+      if (activeFrames.length === 0) {
+          return defaultStyle;
       }
-      return defaultStyle;
+
+      // 3. 处理多轨道冲突：按照 Track ID 排序，ID 越大层级越高（覆盖下层）
+      activeFrames.sort((a, b) => a.trackId - b.trackId);
+      
+      // 4. 取最上层的一个作为最终渲染依据
+      const activeFrame = activeFrames[activeFrames.length - 1];
+
+      const progress = (currentTime - activeFrame.startTime) / activeFrame.duration;
+      const p = Math.min(Math.max(progress, 0), 1);
+      const fromColor = hexToRgb(activeFrame.fromState.color);
+      const toColor = hexToRgb(activeFrame.toState.color);
+      const frameR = lerp(fromColor.r, toColor.r, p);
+      const frameG = lerp(fromColor.g, toColor.g, p);
+      const frameB = lerp(fromColor.b, toColor.b, p);
+      const fromBright = activeFrame.fromState.brightness ?? 0;
+      const toBright = activeFrame.toState.brightness ?? 1;
+      const brightness = lerp(fromBright, toBright, p);
+      const r = Math.round(lerp(baseR, frameR, brightness));
+      const g = Math.round(lerp(baseG, frameG, brightness));
+      const b = Math.round(lerp(baseB, frameB, brightness));
+      return {
+          backgroundColor: `rgb(${r},${g},${b})`,
+          boxShadow: brightness > 0.1 ? `0 0 ${15 * brightness}px rgba(${frameR},${frameG},${frameB}, ${0.8 * brightness})` : 'none'
+      };
   };
 
   return (
@@ -837,16 +844,11 @@ export default function Editor() {
         canRedo={canRedo}
         dragGhost={dragGhost}
         onPlayPause={() => {
-            // 全局顺序播放
             if (isPlaying && globalPlayMode) {
                 setIsPlaying(false);
                 setGlobalPlayMode(false);
             } else {
                 setGlobalPlayMode(true);
-                // 如果当前不是第一个，且时间为0，从第一个开始？或者从当前开始？
-                // 需求："整个工程的播放按钮是把所有的灯效按从上往下的顺序播放"
-                // 通常意味着从头开始，或者从当前选中的灯效开始播放直到结束。
-                // 简单起见，如果当前不在播放，我们从当前选中的灯效开始
                 setIsPlaying(true);
             }
         }}
@@ -865,12 +867,11 @@ export default function Editor() {
         onSaveAnimationAsTemplate={handleSaveAnimAsTemplate}
         onReorderAnimations={handleReorderAnimations}
         onPlaySingleAnimation={(id) => {
-            // 单独播放
             if (selectedAnimationId !== id) {
                 setSelectedAnimationId(id);
                 setCurrentTime(0);
             }
-            setGlobalPlayMode(false); // 强制退出全局模式
+            setGlobalPlayMode(false); 
             setIsPlaying(!isPlaying);
         }}
       />

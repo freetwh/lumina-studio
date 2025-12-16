@@ -18,7 +18,7 @@ interface PreviewAreaProps {
   onLightClick: (e: React.MouseEvent, id: string) => void;
   onClearSelection: () => void;
   onSaveSelection: () => void;
-  onCreateAnimation: () => void; // 新增：创建动画按钮
+  onCreateAnimation: () => void;
 }
 
 export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
@@ -84,22 +84,22 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
            <div className="text-xs text-neutral-400">预览视窗 (按住空格拖拽画布)</div>
            <div className="flex items-center gap-2">
                <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400" onClick={() => onZoomChange(Math.max(0.1, zoom - 0.1))}>
-                   <ZoomOut size={14} />
+                   <ZoomOut size={18} />
                </Button>
                <span className="text-xs text-neutral-400 w-8 text-center">{Math.round(zoom * 100)}%</span>
-               <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400" onClick={() => onZoomChange(Math.min(3, zoom + 1))} title="Zoom In (Fast)">
-                   <ZoomIn size={14} />
+               <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400" onClick={() => onZoomChange(Math.min(3, zoom + 0.1))} title="Zoom In">
+                   <ZoomIn size={18} />
                </Button>
                <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400 ml-2" onClick={() => onZoomChange(1)} title="重置缩放">
-                   <Maximize size={14} />
+                   <Maximize size={18} />
                </Button>
            </div>
        </div>
 
-       {/* 视口区域 - 整个区域都支持 MouseDown 触发框选/拖拽 - 固定高度 600px */}
+       {/* 视口区域 */}
        <div 
          className={cn(
-             "h-[600px] relative overflow-hidden flex items-center justify-center bg-[radial-gradient(#222_1px,transparent_1px)] [background-size:16px_16px] select-none shrink-0",
+             "flex-1 relative overflow-hidden flex items-center justify-center bg-[radial-gradient(#222_1px,transparent_1px)] [background-size:16px_16px] select-none shrink-0",
              cursorStyle
          )}
          onMouseDown={onMouseDown}
@@ -107,18 +107,19 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
            {lightGroup ? (
                <div 
                    style={{ 
-                       // 应用缩放和位移
-                       transform: `scale(${zoom}) translate(${pan.x}px, ${pan.y}px)`, 
+                       // 关键修改：先 Translate 再 Scale。
+                       // 这样 Pan 的单位就是屏幕像素，Zoom 是基于中心点的缩放。
+                       transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, 
                        transformOrigin: 'center center',
-                       transition: isSpacePressed ? 'none' : 'transform 0.1s ease-out' // 拖拽时取消过渡以获得实时响应
+                       transition: isSpacePressed ? 'none' : 'transform 0.1s ease-out'
                    }}
                >
                    <div 
                       ref={ref}
-                      className="relative"
+                      className="relative bg-black/20" 
                       style={containerStyle}
                    >
-                       {/* 选框渲染 (仅在非拖拽模式下) */}
+                       {/* 选框渲染 (在 Grid 内部坐标系) */}
                        {selectionBox && !isSpacePressed && (
                            <div 
                               className="absolute border border-blue-500 bg-blue-500/20 z-20 pointer-events-none"
@@ -140,7 +141,6 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
                                   className={cn(
                                       "absolute rounded-full transition-all duration-75 cursor-pointer border-2 z-10",
                                       isSelected ? "border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)]" : "border-transparent",
-                                      // Hover effect only if node is large enough to see it clearly, and not panning
                                       (nodeSize > 8 && !isSpacePressed) && "hover:scale-125"
                                   )}
                                   style={{
@@ -151,7 +151,6 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
                                       transform: 'translate(-50%, -50%)',
                                       ...style
                                   }}
-                                  // 拖拽模式下阻止节点点击，以免误触
                                   onMouseDown={(e) => !isSpacePressed && onLightClick(e, node.id)}
                                />
                            );
@@ -163,26 +162,28 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
            )}
        </div>
        
-       {/* 浮动操作按钮 */}
-       <div className="absolute top-14 right-4 bg-black/50 p-2 rounded text-white flex gap-2 backdrop-blur-sm border border-white/10 z-20">
-           <Button 
-                size="sm" 
-                className="bg-primary hover:bg-primary/90 text-primary-foreground border-0 gap-1"
-                onClick={onCreateAnimation}
-                title="基于当前选中灯珠创建动画"
-           >
-              <PlusCircle size={14} />
-              创建动画
-           </Button>
-           <div className="w-[1px] bg-white/20 mx-1" />
-           <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onSaveSelection}>
-              保存选区
-           </Button>
-           <div className="w-[1px] bg-white/20 mx-1" />
-           <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onClearSelection}>
-              清空选中 ({selectedLightIds.size})
-           </Button>
-       </div>
+       {/* 浮动操作按钮 - 仅在有选中灯珠时显示 */}
+       {selectedLightIds.size > 0 && (
+           <div className="absolute top-14 right-4 bg-black/50 p-2 rounded text-white flex gap-2 backdrop-blur-sm border border-white/10 z-20 animate-in fade-in zoom-in-95 duration-200">
+               <Button 
+                    size="sm" 
+                    className="bg-primary hover:bg-primary/90 text-primary-foreground border-0 gap-1"
+                    onClick={onCreateAnimation}
+                    title="基于当前选中灯珠创建动画"
+               >
+                  <PlusCircle size={14} />
+                  创建动画
+               </Button>
+               <div className="w-[1px] bg-white/20 mx-1" />
+               <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onSaveSelection}>
+                  保存选区
+               </Button>
+               <div className="w-[1px] bg-white/20 mx-1" />
+               <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onClearSelection}>
+                  清空选中 ({selectedLightIds.size})
+               </Button>
+           </div>
+       )}
 
        <div className="absolute bottom-4 left-4 text-white/30 text-xs pointer-events-none bg-black/50 px-2 py-1 rounded z-20">
            按住 Shift 加选 / 按住 Alt 减选 / 按住空格拖拽 / 拖拽框选
