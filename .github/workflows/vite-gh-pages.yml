@@ -1,0 +1,25 @@
+name: Deploy Vite React to Pages
+on:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+      - run: npm install && npm run build  # 生成 dist/
+      - uses: actions/configure-pages@v4  # 仅初始化 Pages，不影响路径
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist  # 关键：无缩进错误，无其他 action 覆盖
+          retention-days: 1
+      - uses: actions/deploy-pages@v4
