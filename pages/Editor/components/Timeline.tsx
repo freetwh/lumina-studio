@@ -1,6 +1,6 @@
 
-import React, { forwardRef } from 'react';
-import { Play, Pause, Square, RotateCw, ChevronDown, Plus, Undo2, Redo2 } from 'lucide-react';
+import React, { forwardRef, useState, useRef } from 'react';
+import { Play, Pause, Square, RotateCw, Plus, Undo2, Redo2, GripVertical, MoreVertical, Trash2, Save, PenLine } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { cn } from '../../../components/ui/utils';
 import { Project, AnimationNode, Keyframe } from '../../../types';
@@ -11,14 +11,14 @@ interface TimelineProps {
   selectedAnimationId: string;
   selectedKeyframeId: string | null;
   currentTime: number;
-  isPlaying: boolean;
+  isPlaying: boolean; // Global or Current playback state depending on context
   isLooping: boolean;
   zoom: number;
   canUndo: boolean;
   canRedo: boolean;
   dragGhost: { startTime: number; trackId: number; duration: number } | null;
   
-  onPlayPause: () => void;
+  onPlayPause: () => void; // Global play/pause
   onStop: () => void;
   onLoopToggle: () => void;
   onZoomChange: (z: number) => void;
@@ -28,6 +28,14 @@ interface TimelineProps {
   onTimelineClick: (e: React.MouseEvent) => void;
   onUndo: () => void;
   onRedo: () => void;
+  
+  // New Props
+  onAddAnimation: () => void;
+  onRenameAnimation: (id: string, newName: string) => void;
+  onDeleteAnimation: (id: string) => void;
+  onSaveAnimationAsTemplate: (id: string) => void;
+  onReorderAnimations: (dragIdx: number, dropIdx: number) => void;
+  onPlaySingleAnimation: (id: string) => void; // Play specific animation
 }
 
 const TRACK_HEIGHT = 40;
@@ -56,20 +64,67 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
   onKeyframeMouseDown,
   onTimelineClick,
   onUndo,
-  onRedo
+  onRedo,
+  onAddAnimation,
+  onRenameAnimation,
+  onDeleteAnimation,
+  onSaveAnimationAsTemplate,
+  onReorderAnimations,
+  onPlaySingleAnimation
 }, ref) => {
+    
+  // --- Context Menu State ---
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; animId: string } | null>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  
+  // --- Drag and Drop State ---
+  const [draggedItemIdx, setDraggedItemIdx] = useState<number | null>(null);
+
+  // Close context menu on click outside
+  React.useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+        if (contextMenuRef.current && !contextMenuRef.current.contains(e.target as Node)) {
+            setContextMenu(null);
+        }
+    };
+    window.addEventListener('click', handleClick);
+    return () => window.removeEventListener('click', handleClick);
+  }, []);
+
+  const handleContextMenu = (e: React.MouseEvent, animId: string) => {
+      e.preventDefault();
+      setContextMenu({ x: e.clientX, y: e.clientY, animId });
+  };
+
+  const handleDragStart = (e: React.DragEvent, idx: number) => {
+      setDraggedItemIdx(idx);
+      e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault(); // Necessary for drop
+  };
+
+  const handleDrop = (e: React.DragEvent, dropIdx: number) => {
+      e.preventDefault();
+      if (draggedItemIdx !== null && draggedItemIdx !== dropIdx) {
+          onReorderAnimations(draggedItemIdx, dropIdx);
+      }
+      setDraggedItemIdx(null);
+  };
+
   return (
     <div className="h-64 border-t bg-card flex flex-col shrink-0">
         
         {/* 时间轴控制栏 */}
         <div className="h-10 border-b flex items-center px-2 gap-2 bg-secondary/30">
-            <Button size="icon" variant="ghost" onClick={onPlayPause}>
+            <Button size="icon" variant="ghost" onClick={onPlayPause} title="顺序播放所有灯效">
                 {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </Button>
             <Button size="icon" variant="ghost" onClick={onStop}>
                 <Square className="w-4 h-4" />
             </Button>
-            <Button size="icon" variant="ghost" className={cn(isLooping && "text-blue-500")} onClick={onLoopToggle}>
+            <Button size="icon" variant="ghost" className={cn(isLooping && "text-blue-500")} onClick={onLoopToggle} title="循环播放">
                 <RotateCw className="w-4 h-4" />
             </Button>
             <div className="h-4 w-[1px] bg-border mx-2" />
@@ -97,27 +152,52 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-            {/* 工程树结构 */}
-            <div className="w-48 border-r overflow-y-auto bg-secondary/10">
-                <div className="p-2">
-                    <div className="flex items-center gap-1 font-semibold text-sm mb-2">
-                        <ChevronDown size={14} /> 工程根节点
-                    </div>
-                    {project?.animations.map(anim => (
+            {/* 工程树结构 (灯效列表) */}
+            <div className="w-56 border-r overflow-y-auto bg-secondary/10 flex flex-col">
+                <div className="p-2 flex-1 space-y-1">
+                    {project?.animations.map((anim, idx) => (
                         <div 
-                          key={anim.id} 
+                          key={anim.id}
                           className={cn(
-                              "flex items-center gap-2 px-4 py-1.5 text-sm cursor-pointer hover:bg-accent rounded-sm",
-                              selectedAnimationId === anim.id && "bg-accent text-accent-foreground"
+                              "flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer rounded-sm group relative",
+                              selectedAnimationId === anim.id ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
                           )}
                           onClick={() => onSelectAnimation(anim.id)}
+                          onContextMenu={(e) => handleContextMenu(e, anim.id)}
+                          draggable
+                          onDragStart={(e) => handleDragStart(e, idx)}
+                          onDragOver={handleDragOver}
+                          onDrop={(e) => handleDrop(e, idx)}
                         >
-                            <div className="w-2 h-2 rounded-full bg-green-500" />
-                            {anim.name}
+                            <div className="cursor-grab active:cursor-grabbing text-muted-foreground/50 hover:text-muted-foreground">
+                                <GripVertical size={12} />
+                            </div>
+                            
+                            <div className="flex-1 truncate select-none font-medium">
+                                {anim.name}
+                            </div>
+
+                            {/* 单个灯效播放控制 */}
+                            <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center">
+                                <Button 
+                                    size="icon" 
+                                    variant="ghost" 
+                                    className="h-6 w-6" 
+                                    onClick={(e) => { 
+                                        e.stopPropagation(); 
+                                        onPlaySingleAnimation(anim.id); 
+                                    }}
+                                    title="播放此灯效"
+                                >
+                                    {(isPlaying && selectedAnimationId === anim.id) ? <Pause size={10} /> : <Play size={10} />}
+                                </Button>
+                            </div>
                         </div>
                     ))}
-                    <Button variant="ghost" size="sm" className="w-full mt-2 justify-start text-xs text-muted-foreground">
-                        <Plus className="w-3 h-3 mr-2" /> 添加动画轨道
+                </div>
+                <div className="p-2 border-t bg-secondary/5">
+                    <Button variant="ghost" size="sm" className="w-full justify-start text-xs text-muted-foreground" onClick={onAddAnimation}>
+                        <Plus className="w-3 h-3 mr-2" /> 添加灯效
                     </Button>
                 </div>
             </div>
@@ -191,6 +271,45 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
                 </div>
             </div>
         </div>
+        
+        {/* Custom Context Menu */}
+        {contextMenu && (
+            <div 
+                ref={contextMenuRef}
+                className="fixed bg-popover text-popover-foreground border shadow-md rounded-md z-50 w-40 py-1 flex flex-col"
+                style={{ left: contextMenu.x, top: contextMenu.y }}
+            >
+                <button 
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                    onClick={() => { 
+                        const name = prompt("请输入新名称"); 
+                        if (name) onRenameAnimation(contextMenu.animId, name);
+                        setContextMenu(null);
+                    }}
+                >
+                    <PenLine size={14} /> 重命名
+                </button>
+                <button 
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left"
+                    onClick={() => {
+                        onSaveAnimationAsTemplate(contextMenu.animId);
+                        setContextMenu(null);
+                    }}
+                >
+                    <Save size={14} /> 存为模板
+                </button>
+                <div className="h-[1px] bg-border my-1" />
+                <button 
+                    className="flex items-center gap-2 px-3 py-2 text-sm hover:bg-accent text-left text-destructive"
+                    onClick={() => {
+                        onDeleteAnimation(contextMenu.animId);
+                        setContextMenu(null);
+                    }}
+                >
+                    <Trash2 size={14} /> 删除
+                </button>
+            </div>
+        )}
     </div>
   );
 });
