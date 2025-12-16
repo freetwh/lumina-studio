@@ -47,38 +47,97 @@ export const saveStorageData = (data: AppData) => {
 export const seedInitialData = () => {
   const data = getStorageData();
   if (data.lightGroups.length === 0) {
-    // 创建默认的灯组
+    // 创建默认的灯组 (4行 x 16列)
+    const rows = 4;
+    const cols = 16;
     const defaultGroup: LightGroup = {
       id: generateId(),
-      name: "默认 8x8 矩阵",
+      name: "默认 4x16 矩阵",
       createdAt: Date.now(),
-      nodes: Array.from({ length: 64 }).map((_, i) => ({
-        id: `node-${i}`,
-        x: (i % 8) * 12 + 8,
-        y: Math.floor(i / 8) * 12 + 8,
-        brightness: 1,
-        color: '#ffffff'
-      }))
+      gridConfig: { rows, cols },
+      nodes: []
     };
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        // 计算坐标百分比
+        const x = cols > 1 ? (c / (cols - 1)) * 100 : 50;
+        const y = rows > 1 ? (r / (rows - 1)) * 100 : 50;
+        
+        defaultGroup.nodes.push({
+          id: `node-${r}-${c}`,
+          x,
+          y,
+          brightness: 1,
+          color: '#ffffff'
+        });
+      }
+    }
     data.lightGroups.push(defaultGroup);
     
-    // 创建一个基础模板
+    // 辅助函数：根据行列获取节点ID
+    const getNodeIds = (r: number, c: number) => `node-${r}-${c}`;
+
+    // 模板 1: 跑马灯 (Marquee)
+    // 路径: 上边(左->右) -> 右边(上->下) -> 下边(右->左) -> 左边(下->上)
+    const marqueeIds: string[] = [];
+    // Top Row
+    for(let c=0; c<cols; c++) marqueeIds.push(getNodeIds(0, c));
+    // Right Col (excluding top)
+    for(let r=1; r<rows; r++) marqueeIds.push(getNodeIds(r, cols-1));
+    // Bottom Row (excluding right)
+    for(let c=cols-2; c>=0; c--) marqueeIds.push(getNodeIds(rows-1, c));
+    // Left Col (excluding bottom and top)
+    for(let r=rows-2; r>0; r--) marqueeIds.push(getNodeIds(r, 0));
+
+    const marqueeKeyframes = marqueeIds.map((id, index) => ({
+         id: generateId(),
+         trackId: 0,
+         startTime: index * 50, // 50ms 间隔
+         duration: 300,
+         targetLightIds: [id],
+         animationType: 'flash',
+         fromState: { color: '#00ff00', brightness: 1 }, // 亮绿色
+         toState: { color: '#00ff00', brightness: 0 }   // 淡出
+    }));
+
     data.templates.push({
       id: generateId(),
-      name: "彩虹波浪",
+      name: "跑马灯 (Marquee)",
       createdAt: Date.now(),
-      keyframes: [
-         {
-             id: generateId(),
-             trackId: 0,
-             startTime: 0,
-             duration: 1000,
-             targetLightIds: defaultGroup.nodes.map(n => n.id),
-             animationType: 'fade',
-             fromState: { color: '#ff0000', brightness: 0 },
-             toState: { color: '#0000ff', brightness: 1 }
-         }
-      ]
+      keyframes: marqueeKeyframes,
+      lightGroupId: defaultGroup.id
+    });
+
+    // 模板 2: 彩虹波浪 (Rainbow Wave)
+    const waveKeyframes = [];
+    const colors = ['#ff0000', '#ffa500', '#ffff00', '#008000', '#0000ff', '#4b0082', '#ee82ee'];
+    
+    for(let c=0; c<cols; c++) {
+        const colNodeIds = [];
+        for(let r=0; r<rows; r++) {
+            colNodeIds.push(getNodeIds(r, c));
+        }
+        
+        // 每一列创建一个关键帧
+        waveKeyframes.push({
+            id: generateId(),
+            trackId: c % 5, // 轨道错开，避免视觉重叠拥挤
+            startTime: c * 100,
+            duration: 1000,
+            targetLightIds: colNodeIds,
+            animationType: 'fade',
+            fromState: { color: colors[c % colors.length], brightness: 1 }, // 亮起
+            toState: { color: colors[c % colors.length], brightness: 0 }    // 拖尾淡出
+        });
+    }
+
+    data.templates.push({
+      id: generateId(),
+      name: "彩虹波浪 (Rainbow Wave)",
+      createdAt: Date.now(),
+      keyframes: waveKeyframes,
+      lightGroupId: defaultGroup.id
     });
 
     saveStorageData(data);

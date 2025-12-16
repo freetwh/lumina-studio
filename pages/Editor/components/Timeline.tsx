@@ -189,7 +189,7 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
                                     }}
                                     title="播放此灯效"
                                 >
-                                    {(isPlaying && selectedAnimationId === anim.id) ? <Pause size={10} /> : <Play size={10} />}
+                                    {(isPlaying && selectedAnimationId === anim.id) ? <Pause size={14} /> : <Play size={14} />}
                                 </Button>
                             </div>
                         </div>
@@ -216,7 +216,7 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
                 
                 {/* 标尺 */}
                 <div className="h-6 border-b bg-secondary/20 sticky top-0 z-10 flex">
-                     {Array.from({ length: Math.ceil((currentAnimation?.duration || 5000) / 1000) + 5 }).map((_, sec) => (
+                     {Array.from({ length: Math.ceil((currentAnimation?.duration || 2000) / 1000) + 1 }).map((_, sec) => (
                          <div key={sec} className="border-l border-border/50 text-[10px] pl-1 text-muted-foreground select-none" style={{ width: `${PIXELS_PER_SEC * zoom}px`, flexShrink: 0 }}>
                              {sec}s
                          </div>
