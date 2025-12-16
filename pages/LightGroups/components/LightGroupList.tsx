@@ -1,17 +1,16 @@
 
 import React from 'react';
-import { Trash2, Settings } from 'lucide-react';
+import { Trash2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '../../../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '../../../components/ui/card';
 import { LightGroup } from '../../../types';
 
 interface LightGroupListProps {
   groups: LightGroup[];
   onDelete: (id: string) => void;
-  onEdit: (group: LightGroup) => void;
 }
 
-export const LightGroupList: React.FC<LightGroupListProps> = ({ groups, onDelete, onEdit }) => {
+export const LightGroupList: React.FC<LightGroupListProps> = ({ groups, onDelete }) => {
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
       {groups.map(group => {
@@ -25,7 +24,7 @@ export const LightGroupList: React.FC<LightGroupListProps> = ({ groups, onDelete
                 <CardHeader>
                     <CardTitle className="flex justify-between items-center">
                         {group.name}
-                        <Button variant="ghost" size="icon" className="text-destructive" onClick={() => onDelete(group.id)}>
+                        <Button variant="ghost" size="icon" className="text-destructive hover:bg-destructive/10" onClick={() => onDelete(group.id)}>
                             <Trash2 size={16} />
                         </Button>
                     </CardTitle>
@@ -61,11 +60,6 @@ export const LightGroupList: React.FC<LightGroupListProps> = ({ groups, onDelete
                         {group.gridConfig ? ` (${group.gridConfig.rows}x${group.gridConfig.cols})` : ''}
                     </p>
                 </CardContent>
-                <CardFooter>
-                    <Button variant="outline" className="w-full" onClick={() => onEdit(group)}>
-                        <Settings className="w-4 h-4 mr-2" /> 编辑设置
-                    </Button>
-                </CardFooter>
             </Card>
           );
       })}
