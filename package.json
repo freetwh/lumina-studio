@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
+    "build": "vite build --mode production",
+    "build:dev": "vite build --mode development",
+    "preview": "vite preview",
+    "preview:prod": "vite preview --port 4173 --host"
   },
   "dependencies": {
     "lucide-react": "^0.561.0",
