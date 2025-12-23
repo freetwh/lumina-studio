@@ -1,21 +1,28 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { LightGroup } from '../../../types';
 
+export interface UseSelectionBoxProps {
+    lightGroup: LightGroup | null;
+    selectedLightIds: Set<string>;
+    onSelectionChange: (ids: Set<string>) => void;
+}
+
 export interface UseSelectionBoxReturn {
     selectionBox: { x: number; y: number; w: number; h: number } | null;
-    selectedLightIds: Set<string>;
-    setSelectedLightIds: (ids: Set<string>) => void;
     handlePreviewMouseDown: (e: React.MouseEvent, previewRef: React.RefObject<HTMLDivElement>, isSpacePressed: boolean) => void;
     handleLightClick: (e: React.MouseEvent, id: string) => void;
 }
 
 /**
- * 框选逻辑 Hook
+ * 框选逻辑 Hook（受控模式）
  * 管理预览区域的框选和灯珠选择
  */
-export const useSelectionBox = (lightGroup: LightGroup | null): UseSelectionBoxReturn => {
+export const useSelectionBox = ({
+    lightGroup,
+    selectedLightIds,
+    onSelectionChange
+}: UseSelectionBoxProps): UseSelectionBoxReturn => {
     const [selectionBox, setSelectionBox] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
-    const [selectedLightIds, setSelectedLightIds] = useState<Set<string>>(new Set());
     const selectionStartRef = useRef<{ x: number; y: number } | null>(null);
     const initialSelectionRef = useRef<Set<string>>(new Set());
     const previewRefCache = useRef<React.RefObject<HTMLDivElement> | null>(null);
@@ -52,26 +59,25 @@ export const useSelectionBox = (lightGroup: LightGroup | null): UseSelectionBoxR
             initialSelectionRef.current = new Set(selectedLightIds);
         } else {
             initialSelectionRef.current = new Set();
-            setSelectedLightIds(new Set());
+            onSelectionChange(new Set());
         }
-    }, [selectedLightIds]);
+    }, [selectedLightIds, onSelectionChange]);
 
     const handleLightClick = useCallback((e: React.MouseEvent, id: string) => {
         e.stopPropagation();
         if (e.altKey) e.preventDefault();
         
-        setSelectedLightIds(prev => {
-            const next = new Set(prev);
-            if (e.shiftKey) {
-                next.add(id);
-            } else if (e.altKey) {
-                next.delete(id);
-            } else {
-                return new Set([id]);
-            }
-            return next;
-        });
-    }, []);
+        const next = new Set(selectedLightIds);
+        if (e.shiftKey) {
+            next.add(id);
+        } else if (e.altKey) {
+            next.delete(id);
+        } else {
+            onSelectionChange(new Set([id]));
+            return;
+        }
+        onSelectionChange(next);
+    }, [selectedLightIds, onSelectionChange]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -120,12 +126,12 @@ export const useSelectionBox = (lightGroup: LightGroup | null): UseSelectionBoxR
                 const finalSelection = new Set(initialSelectionRef.current);
                 if (e.shiftKey) {
                     boxSelectedIds.forEach(id => finalSelection.add(id));
-                    setSelectedLightIds(finalSelection);
+                    onSelectionChange(finalSelection);
                 } else if (e.altKey) {
                     boxSelectedIds.forEach(id => finalSelection.delete(id));
-                    setSelectedLightIds(finalSelection);
+                    onSelectionChange(finalSelection);
                 } else {
-                    setSelectedLightIds(boxSelectedIds);
+                    onSelectionChange(boxSelectedIds);
                 }
             }
         };
@@ -144,14 +150,11 @@ export const useSelectionBox = (lightGroup: LightGroup | null): UseSelectionBoxR
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-    }, [lightGroup]);
+    }, [lightGroup, onSelectionChange]);
 
     return {
         selectionBox,
-        selectedLightIds,
-        setSelectedLightIds,
         handlePreviewMouseDown,
         handleLightClick
     };
 };
-

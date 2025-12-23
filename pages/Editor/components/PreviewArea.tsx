@@ -1,43 +1,64 @@
+/**
+ * PreviewArea 组件 - 灯光预览区域
+ * 
+ * 采用受控组件模式，复用 Hooks：
+ * - useCanvasPan: 画布平移
+ * - useSelectionBox: 框选逻辑（受控）
+ * - useLightRenderer: 灯光渲染
+ */
 
-import React, { forwardRef, useMemo } from 'react';
+import React, { forwardRef, useMemo, useState, useRef, useCallback } from 'react';
 import { ZoomIn, ZoomOut, Maximize, PlusCircle } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { cn } from '../../../components/ui/utils';
-import { LightGroup } from '../../../types';
+import { LightGroup, AnimationNode } from '../../../types';
+import { useCanvasPan } from '../hooks/useCanvasPan';
+import { useSelectionBox } from '../hooks/useSelectionBox';
+import { useLightRenderer } from '../hooks/useLightRenderer';
 
 interface PreviewAreaProps {
   lightGroup: LightGroup | null;
+  currentAnimation: AnimationNode | undefined;
+  currentTime: number;
   selectedLightIds: Set<string>;
-  selectionBox: { x: number; y: number; w: number; h: number } | null;
-  zoom: number;
-  pan: { x: number; y: number };
-  isSpacePressed: boolean;
-  onZoomChange: (zoom: number) => void;
-  getLightStyle: (nodeId: string) => React.CSSProperties;
-  onMouseDown: (e: React.MouseEvent) => void;
-  onLightClick: (e: React.MouseEvent, id: string) => void;
-  onClearSelection: () => void;
-  onSaveSelection: () => void;
-  onCreateAnimation: () => void;
+  
+  onSelectionChange: (ids: Set<string>) => void;
+  onSaveSelection?: () => void;
+  onCreateAnimation?: () => void;
 }
 
 export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
   lightGroup,
+  currentAnimation,
+  currentTime,
   selectedLightIds,
-  selectionBox,
-  zoom,
-  pan,
-  isSpacePressed,
-  onZoomChange,
-  getLightStyle,
-  onMouseDown,
-  onLightClick,
-  onClearSelection,
+  onSelectionChange,
   onSaveSelection,
   onCreateAnimation
 }, ref) => {
   
-  // Calculate container dimensions based on grid aspect ratio
+  // ========== 内部 UI 状态 ==========
+  const [zoom, setZoom] = useState(1);
+  
+  const internalRef = useRef<HTMLDivElement>(null);
+  const previewRef = (ref as React.RefObject<HTMLDivElement>) || internalRef;
+
+  // ========== 复用 Hooks（受控模式）==========
+  
+  // 画布平移
+  const { pan, isSpacePressed, handleMouseDown: handleCanvasPanMouseDown } = useCanvasPan();
+  
+  // 框选逻辑（受控）
+  const { selectionBox, handlePreviewMouseDown: handleSelectionMouseDown, handleLightClick } = useSelectionBox({
+      lightGroup,
+      selectedLightIds,
+      onSelectionChange
+  });
+  
+  // 灯光渲染
+  const { getLightStyle } = useLightRenderer(currentAnimation, currentTime);
+
+  // ========== 容器尺寸计算 ==========
   const { containerStyle, nodeSize } = useMemo(() => {
       if (!lightGroup) return { containerStyle: { width: 500, height: 500 }, nodeSize: 16 };
       
@@ -55,139 +76,146 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
           height = MAX_DIM;
           width = MAX_DIM * ratio;
       }
-
-      // Ensure a minimum size to prevent it from being too small to interact
-      if (width < 200) { width = 200; height = 200 / ratio; }
-      if (height < 200) { height = 200; width = 200 * ratio; }
-
-      // Calculate node size to fit density
-      const cellW = width / cols;
-      const cellH = height / rows;
-      const theoreticalSize = Math.min(cellW, cellH);
-      const size = Math.max(4, Math.min(24, theoreticalSize * 0.7));
-
-      return {
-          containerStyle: { width, height },
-          nodeSize: size
+      
+      const calculatedNodeSize = Math.max(8, Math.min(width / cols * 0.6, 24));
+      
+      return { 
+          containerStyle: { width, height }, 
+          nodeSize: calculatedNodeSize 
       };
   }, [lightGroup]);
 
-  // 计算鼠标样式
-  const cursorStyle = isSpacePressed 
-    ? 'cursor-grab active:cursor-grabbing' 
-    : 'cursor-crosshair';
+  // ========== 鼠标按下处理（组合两个 Hook）==========
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+      handleCanvasPanMouseDown(e);
+      handleSelectionMouseDown(e, previewRef, isSpacePressed);
+  }, [handleCanvasPanMouseDown, handleSelectionMouseDown, previewRef, isSpacePressed]);
+
+  // ========== 缩放控制 ==========
+  const handleZoomIn = () => setZoom(prev => Math.min(prev + 0.2, 2));
+  const handleZoomOut = () => setZoom(prev => Math.max(prev - 0.2, 0.5));
+  const handleZoomReset = () => { setZoom(1); };
+
+  if (!lightGroup) {
+      return (
+          <div className="flex-1 flex items-center justify-center bg-secondary/5">
+              <p className="text-muted-foreground">请先创建或选择灯光组</p>
+          </div>
+      );
+  }
 
   return (
-    <div className="flex-1 bg-neutral-900 relative flex flex-col overflow-hidden">
-       {/* 顶部工具栏 */}
-       <div className="h-10 border-b border-neutral-800 flex items-center justify-between px-4 bg-black/40 shrink-0 z-10">
-           <div className="text-xs text-neutral-400">预览视窗 (按住空格拖拽画布)</div>
-           <div className="flex items-center gap-2">
-               <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400" onClick={() => onZoomChange(Math.max(0.1, zoom - 0.1))}>
-                   <ZoomOut size={18} />
-               </Button>
-               <span className="text-xs text-neutral-400 w-8 text-center">{Math.round(zoom * 100)}%</span>
-               <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400" onClick={() => onZoomChange(Math.min(3, zoom + 0.1))} title="Zoom In">
-                   <ZoomIn size={18} />
-               </Button>
-               <Button size="icon" variant="ghost" className="h-6 w-6 text-neutral-400 ml-2" onClick={() => onZoomChange(1)} title="重置缩放">
-                   <Maximize size={18} />
-               </Button>
-           </div>
-       </div>
+    <div className="flex-1 flex flex-col overflow-hidden bg-secondary/5 relative">
+      {/* 工具栏 */}
+      <div className="absolute top-2 right-2 z-10 flex flex-col gap-1 bg-card/90 backdrop-blur-sm rounded-md p-1 border shadow-sm">
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleZoomIn} title="放大">
+              <ZoomIn className="w-4 h-4" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleZoomOut} title="缩小">
+              <ZoomOut className="w-4 h-4" />
+          </Button>
+          <Button size="icon" variant="ghost" className="h-8 w-8" onClick={handleZoomReset} title="重置视图">
+              <Maximize className="w-4 h-4" />
+          </Button>
+      </div>
 
-       {/* 视口区域 */}
-       <div 
-         className={cn(
-             "flex-1 relative overflow-hidden flex items-center justify-center bg-[radial-gradient(#222_1px,transparent_1px)] [background-size:16px_16px] select-none shrink-0",
-             cursorStyle
-         )}
-         onMouseDown={onMouseDown}
-       >
-           {lightGroup ? (
-               <div 
-                   style={{ 
-                       // 关键修改：先 Translate 再 Scale。
-                       // 这样 Pan 的单位就是屏幕像素，Zoom 是基于中心点的缩放。
-                       transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, 
-                       transformOrigin: 'center center',
-                       transition: isSpacePressed ? 'none' : 'transform 0.1s ease-out'
-                   }}
-               >
-                   <div 
-                      ref={ref}
-                      className="relative bg-black/20" 
-                      style={containerStyle}
-                   >
-                       {/* 选框渲染 (在 Grid 内部坐标系) */}
-                       {selectionBox && !isSpacePressed && (
-                           <div 
-                              className="absolute border border-blue-500 bg-blue-500/20 z-20 pointer-events-none"
-                              style={{
-                                  left: selectionBox.x,
-                                  top: selectionBox.y,
-                                  width: selectionBox.w,
-                                  height: selectionBox.h
-                              }}
-                           />
-                       )}
-
-                       {lightGroup.nodes?.map(node => {
-                           const isSelected = selectedLightIds.has(node.id);
-                           const style = getLightStyle(node.id);
-                           return (
-                               <div
-                                  key={node.id}
-                                  className={cn(
-                                      "absolute rounded-full transition-all duration-75 cursor-pointer border-2 z-10",
-                                      isSelected ? "border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)]" : "border-transparent",
-                                      (nodeSize > 8 && !isSpacePressed) && "hover:scale-125"
-                                  )}
-                                  style={{
-                                      left: `${node.x}%`,
-                                      top: `${node.y}%`,
-                                      width: nodeSize,
-                                      height: nodeSize,
-                                      transform: 'translate(-50%, -50%)',
-                                      ...style
-                                  }}
-                                  onMouseDown={(e) => !isSpacePressed && onLightClick(e, node.id)}
-                               />
-                           );
-                       })}
-                   </div>
-               </div>
-           ) : (
-               <div className="text-white">正在加载灯组...</div>
-           )}
-       </div>
-       
-       {/* 浮动操作按钮 - 仅在有选中灯珠时显示 */}
-       {selectedLightIds.size > 0 && (
-           <div className="absolute top-14 right-4 bg-black/50 p-2 rounded text-white flex gap-2 backdrop-blur-sm border border-white/10 z-20 animate-in fade-in zoom-in-95 duration-200">
-               <Button 
-                    size="sm" 
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground border-0 gap-1"
-                    onClick={onCreateAnimation}
-                    title="基于当前选中灯珠创建动画"
-               >
-                  <PlusCircle size={14} />
-                  创建动画
-               </Button>
-               <div className="w-[1px] bg-white/20 mx-1" />
-               <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onSaveSelection}>
+      {/* 底部操作栏 */}
+      {selectedLightIds.size > 0 && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 bg-card/95 backdrop-blur-sm rounded-full px-4 py-2 border shadow-lg flex items-center gap-3">
+            <span className="text-sm font-medium">已选中 {selectedLightIds.size} 个灯珠</span>
+            <div className="w-[1px] h-4 bg-border" />
+            {onSaveSelection && (
+              <Button size="sm" variant="ghost" onClick={onSaveSelection}>
                   保存选区
-               </Button>
-               <div className="w-[1px] bg-white/20 mx-1" />
-               <Button size="sm" variant="ghost" className="text-white hover:bg-white/20" onClick={onClearSelection}>
-                  清空选中 ({selectedLightIds.size})
-               </Button>
-           </div>
-       )}
+              </Button>
+            )}
+            {onCreateAnimation && (
+              <Button size="sm" onClick={onCreateAnimation}>
+                  <PlusCircle className="w-4 h-4 mr-1" /> 创建动画
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={() => onSelectionChange(new Set())}>
+                清空
+            </Button>
+        </div>
+      )}
 
-       <div className="absolute bottom-4 left-4 text-white/30 text-xs pointer-events-none bg-black/50 px-2 py-1 rounded z-20">
-           按住 Shift 加选 / 按住 Alt 减选 / 按住空格拖拽 / 拖拽框选
-       </div>
+      {/* 画布区域 - 整个区域都支持交互 */}
+      <div 
+        className="flex-1 flex items-center justify-center overflow-hidden"
+        onMouseDown={handleMouseDown}
+      >
+        <div 
+          className={cn(
+              "relative border rounded-lg bg-background/50 shadow-inner pointer-events-none",
+              isSpacePressed ? "cursor-grab" : "cursor-crosshair"
+          )}
+          style={{ 
+              width: `${containerStyle.width * zoom}px`, 
+              height: `${containerStyle.height * zoom}px`,
+              transform: `translate(${pan.x}px, ${pan.y}px)`
+          }}
+        >
+          <div
+            ref={previewRef}
+            className="absolute inset-0 pointer-events-none"
+            style={{ 
+                width: `${containerStyle.width}px`, 
+                height: `${containerStyle.height}px`,
+                transform: `scale(${zoom})`,
+                transformOrigin: 'top left'
+            }}
+          >
+            {/* 框选矩形 */}
+            {selectionBox && (
+              <div 
+                className="absolute border-2 border-blue-500 bg-blue-500/10 pointer-events-none z-20"
+                style={{
+                    left: selectionBox.x,
+                    top: selectionBox.y,
+                    width: selectionBox.w,
+                    height: selectionBox.h
+                }}
+              />
+            )}
+
+            {/* 灯珠节点 */}
+            {lightGroup.nodes.map(node => {
+              const x = (node.x / 100) * containerStyle.width;
+              const y = (node.y / 100) * containerStyle.height;
+              const isSelected = selectedLightIds.has(node.id);
+              const lightStyle = getLightStyle(node.id);
+              
+              return (
+                <div
+                  key={node.id}
+                  className={cn(
+                      "absolute rounded-full cursor-pointer pointer-events-auto  cursor-pointer border-2 z-10",
+                      "transition-all duration-75",
+                      isSelected ? "border-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.8)]" : "border-transparent"
+                  )}
+                  style={{
+                      left: x - nodeSize / 2,
+                      top: y - nodeSize / 2,
+                      width: nodeSize,
+                      height: nodeSize,
+                      ...lightStyle
+                  }}
+                  onClick={(e) => handleLightClick(e, node.id)}
+                  title={`灯珠 ${node.id}`}
+                />
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      {/* 提示信息 */}
+      {isSpacePressed && (
+        <div className="absolute bottom-4 left-4 bg-card/90 backdrop-blur-sm rounded px-3 py-1.5 border shadow-sm text-xs text-muted-foreground pointer-events-none">
+          按住空格键拖拽画布
+        </div>
+      )}
     </div>
   );
 });
