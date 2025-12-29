@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import * as z from 'zod';
 import { Button } from '../../../components/ui/button';
 import { Dialog } from '../../../components/ui/dialog';
 import { Input } from '../../../components/ui/input';
@@ -13,6 +14,15 @@ interface CreateProjectDialogProps {
   templates: Template[];
 }
 
+const formSchema = z.object({
+  name: z.string().min(1, { message: '请输入工程名称' }).trim(),
+  baseType: z.enum(['group', 'template']),
+  baseId: z.string().min(1, { message: '请选择灯组或模板' }),
+});
+
+type FormData = z.infer<typeof formSchema>;
+type FormErrors = Partial<Record<keyof FormData, string>>;
+
 export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({
   isOpen,
   onClose,
@@ -20,15 +30,43 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({
   lightGroups,
   templates
 }) => {
-  const [name, setName] = useState('');
-  const [baseType, setBaseType] = useState<'group' | 'template'>('group');
-  const [baseId, setBaseId] = useState('');
+  const [formData, setFormData] = useState<FormData>({
+    name: '',
+    baseType: 'group',
+    baseId: '',
+  });
+  const [errors, setErrors] = useState<FormErrors>({});
 
-  const handleCreate = () => {
-    if (name && baseId) {
-      onCreate(name, baseType, baseId);
-      setName('');
-      setBaseId('');
+  // 当切换 baseType 时，重置 baseId
+  useEffect(() => {
+    setFormData(prev => ({...prev, baseId: ''}));
+    setErrors(prev => ({...prev, baseId: undefined}));
+  }, [formData.baseType]);
+
+  // 重置表单当对话框关闭时
+  useEffect(() => {
+    if (!isOpen) {
+      setFormData({ name: '', baseType: 'group', baseId: '' });
+      setErrors({});
+    }
+  }, [isOpen]);
+
+  const handleSubmit = () => {
+    try {
+      const validated = formSchema.parse(formData);
+      onCreate(validated.name, validated.baseType, validated.baseId);
+      setFormData({ name: '', baseType: 'group', baseId: '' });
+      setErrors({});
+      onClose();
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        const newErrors: FormErrors = {};
+        error.issues.forEach(issue => {
+          const path = issue.path[0] as keyof FormData;
+          newErrors[path] = issue.message;
+        });
+        setErrors(newErrors);
+      }
     }
   };
 
@@ -40,44 +78,87 @@ export const CreateProjectDialog: React.FC<CreateProjectDialogProps> = ({
       footer={
           <>
               <Button variant="ghost" onClick={onClose}>取消</Button>
-              <Button onClick={handleCreate}>创建</Button>
+              <Button onClick={handleSubmit}>创建</Button>
           </>
       }
     >
       <div className="space-y-4">
-          <div className="space-y-2">
-              <Label>工程名称</Label>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="我的灯光秀" />
+        <div className="space-y-2">
+          <Label htmlFor="project-name">
+            工程名称 <span className="text-destructive">*</span>
+          </Label>
+          <Input
+            id="project-name"
+            placeholder="我的灯光秀"
+            value={formData.name}
+            onChange={(e) => {
+              setFormData(prev => ({ ...prev, name: e.target.value }));
+              setErrors(prev => ({ ...prev, name: undefined }));
+            }}
+            className={errors.name ? 'border-destructive focus-visible:ring-destructive' : ''}
+          />
+          {errors.name && (
+            <p className="text-sm text-destructive">{errors.name}</p>
+          )}
+        </div>
+        
+        <div className="space-y-2">
+          <Label>初始内容</Label>
+          <div className="flex gap-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                value="group"
+                checked={formData.baseType === 'group'}
+                onChange={() => setFormData(prev => ({ ...prev, baseType: 'group' }))}
+              />
+              选择灯组
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                value="template"
+                checked={formData.baseType === 'template'}
+                onChange={() => setFormData(prev => ({ ...prev, baseType: 'template' }))}
+              />
+              选择模板
+            </label>
           </div>
-          
-          <div className="space-y-2">
-              <Label>初始内容</Label>
-              <div className="flex gap-4">
-                  <label className="flex items-center gap-2">
-                      <input type="radio" name="baseType" checked={baseType === 'group'} onChange={() => setBaseType('group')} />
-                      选择灯组
-                  </label>
-                  <label className="flex items-center gap-2">
-                      <input type="radio" name="baseType" checked={baseType === 'template'} onChange={() => setBaseType('template')} />
-                      选择模板
-                  </label>
-              </div>
-          </div>
+        </div>
 
-          <div className="space-y-2">
-              <Label>{baseType === 'group' ? '选择灯组' : '选择模板'}</Label>
-              <select 
-                  className="w-full h-10 rounded-md border border-input bg-background px-3 text-sm"
-                  value={baseId}
-                  onChange={e => setBaseId(e.target.value)}
-              >
-                  <option value="">请选择...</option>
-                  {baseType === 'group' 
-                      ? lightGroups.map(lg => <option key={lg.id} value={lg.id}>{lg.name} ({lg.nodes.length} 灯珠)</option>)
-                      : templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)
-                  }
-              </select>
-          </div>
+        <div className="space-y-2">
+          <Label htmlFor="base-select">
+            {formData.baseType === 'group' ? '选择灯组' : '选择模板'} <span className="text-destructive">*</span>
+          </Label>
+          <select
+            id="base-select"
+            className={`w-full h-10 rounded-md border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+              errors.baseId ? 'border-destructive focus:ring-destructive' : 'border-input'
+            }`}
+            value={formData.baseId}
+            onChange={(e) => {
+              setFormData(prev => ({ ...prev, baseId: e.target.value }));
+              setErrors(prev => ({ ...prev, baseId: undefined }));
+            }}
+          >
+            <option value="">请选择...</option>
+            {formData.baseType === 'group'
+              ? lightGroups.map(lg => (
+                  <option key={lg.id} value={lg.id}>
+                    {lg.name} ({lg.nodes.length} 灯珠)
+                  </option>
+                ))
+              : templates.map(t => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))
+            }
+          </select>
+          {errors.baseId && (
+            <p className="text-sm text-destructive">{errors.baseId}</p>
+          )}
+        </div>
       </div>
     </Dialog>
   );
