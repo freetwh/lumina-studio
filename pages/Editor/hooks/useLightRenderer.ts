@@ -27,7 +27,7 @@ export const useLightRenderer = (
             // 使用 < (startTime + duration) 确保如果一个动画在1000ms结束，另一个在1000ms开始，不会产生闪烁或双重计算
             const activeFrames = currentAnimation.keyframes.filter(k => 
                 k.targetLightIds.includes(nodeId) && 
-                currentTime >= k.startTime && 
+                currentTime > k.startTime && 
                 currentTime < (k.startTime + k.duration)
             );
 
