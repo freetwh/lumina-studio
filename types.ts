@@ -32,7 +32,7 @@ export interface Keyframe {
   targetLightIds: string[];
   fromState: KeyframeState;
   toState: KeyframeState;
-  animationType: string; // 'fade', 'pulse', 'flash'
+  animationType: string; // 'fade', 'pulse', 'flash', 'strobe'
 }
 
 export interface AnimationNode {
@@ -41,6 +41,9 @@ export interface AnimationNode {
   keyframes: Keyframe[];
   duration: number; // Total duration in ms
 }
+
+// Type alias for Animation (backward compatibility)
+export type Animation = AnimationNode;
 
 export interface SavedSelection {
   id: string;

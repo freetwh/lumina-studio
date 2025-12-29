@@ -199,3 +199,178 @@ export const hexToRgb = (hex: string) => {
  * @param t 进度 (0-1)
  */
 export const lerp = (start: number, end: number, t: number) => start * (1 - t) + end * t;
+
+// --- 动画关键帧生成函数 ---
+
+/**
+ * 为不同动画类型生成多个连贯的关键帧
+ * @param type 动画类型: 'fade', 'pulse', 'flash', 'strobe'
+ * @param baseStartTime 基础开始时间
+ * @param baseDuration 基础时长
+ * @param targetLightIds 目标灯珠ID数组
+ * @param trackId 轨道ID
+ * @param color 动画颜色
+ */
+export const generateAnimationKeyframes = (
+  type: string,
+  baseStartTime: number,
+  baseDuration: number,
+  targetLightIds: string[],
+  trackId: number,
+  color: string
+): Array<{ 
+  id: string; 
+  trackId: number; 
+  startTime: number; 
+  duration: number; 
+  targetLightIds: string[]; 
+  animationType: string; 
+  fromState: { color: string; brightness: number }; 
+  toState: { color: string; brightness: number } 
+}> => {
+  const keyframes = [];
+  const segmentCount = type === 'strobe' ? 8 : (type === 'pulse' ? 4 : 3); // 每种动画的分段数
+  const segmentDuration = baseDuration / segmentCount;
+
+  switch (type) {
+    case 'fade': // 淡入淡出: 0 -> 1 -> 0
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'fade',
+        fromState: { color, brightness: 0 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'fade',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration * 2,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'fade',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 0 }
+      });
+      break;
+
+    case 'pulse': // 脉冲: 0.3 -> 1 -> 0.3 -> 1 -> 0.3
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'pulse',
+        fromState: { color, brightness: 0.3 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'pulse',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 0.3 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration * 2,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'pulse',
+        fromState: { color, brightness: 0.3 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration * 3,
+        duration: segmentDuration,
+        targetLightIds,
+        animationType: 'pulse',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 0.3 }
+      });
+      break;
+
+    case 'flash': // 闪光: 瞬间亮起，短暂保持，快速熄灭
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime,
+        duration: segmentDuration * 0.2,
+        targetLightIds,
+        animationType: 'flash',
+        fromState: { color, brightness: 0 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration * 0.2,
+        duration: segmentDuration * 0.6,
+        targetLightIds,
+        animationType: 'flash',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 1 }
+      });
+      keyframes.push({
+        id: generateId(),
+        trackId,
+        startTime: baseStartTime + segmentDuration * 0.8,
+        duration: segmentDuration * 0.2,
+        targetLightIds,
+        animationType: 'flash',
+        fromState: { color, brightness: 1 },
+        toState: { color, brightness: 0 }
+      });
+      break;
+
+    case 'strobe': // 频闪: 快速闪烁多次
+      const strobeOnDuration = segmentDuration * 0.3;
+      const strobeOffDuration = segmentDuration * 0.7;
+      for (let i = 0; i < segmentCount; i++) {
+        // 亮起
+        keyframes.push({
+          id: generateId(),
+          trackId,
+          startTime: baseStartTime + i * segmentDuration,
+          duration: strobeOnDuration,
+          targetLightIds,
+          animationType: 'strobe',
+          fromState: { color, brightness: 0 },
+          toState: { color, brightness: 1 }
+        });
+        // 熄灭
+        keyframes.push({
+          id: generateId(),
+          trackId,
+          startTime: baseStartTime + i * segmentDuration + strobeOnDuration,
+          duration: strobeOffDuration,
+          targetLightIds,
+          animationType: 'strobe',
+          fromState: { color, brightness: 1 },
+          toState: { color, brightness: 0 }
+        });
+      }
+      break;
+  }
+
+  return keyframes;
+};

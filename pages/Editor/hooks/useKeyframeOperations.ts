@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { Project, Animation, Keyframe } from '../../../types';
-import { generateId } from '../../../utils';
+import { generateId, generateAnimationKeyframes } from '../../../utils';
 import { calculateDuration } from '../services/animationCalculator';
 import { findAvailableTrack } from '../services/collisionDetector';
 
@@ -45,28 +45,32 @@ export const useKeyframeOperations = ({
             return;
         }
 
-        const newKeyframe: Keyframe = {
-            id: generateId(),
-            trackId: 0, 
-            startTime: currentTime,
-            duration: 1000,
-            targetLightIds: Array.from(selectedLightIds),
-            animationType: type,
-            fromState: { color: '#000000', brightness: 0 },
-            toState: { color: type === 'flash' ? '#ffffff' : '#ff0000', brightness: 1 }
-        };
-
-        // 使用碰撞检测服务查找可用轨道
-        const targetTrack = findAvailableTrack(
-            newKeyframe.startTime,
-            newKeyframe.duration,
-            currentAnimation.keyframes
+        const baseDuration = 2000; // 基础动画时长 2 秒
+        const color = type === 'flash' ? '#ffffff' : '#ff0000';
+        
+        // 生成多个连贯的关键帧
+        const newKeyframes = generateAnimationKeyframes(
+            type,
+            currentTime,
+            baseDuration,
+            Array.from(selectedLightIds),
+            0,
+            color
         );
-        newKeyframe.trackId = targetTrack;
+
+        // 为每个关键帧查找可用轨道并更新
+        const keyframesWithTracks = newKeyframes.map(kf => {
+            const targetTrack = findAvailableTrack(
+                kf.startTime,
+                kf.duration,
+                currentAnimation.keyframes
+            );
+            return { ...kf, trackId: targetTrack };
+        });
 
         const updatedAnim = {
             ...currentAnimation,
-            keyframes: [...currentAnimation.keyframes, newKeyframe]
+            keyframes: [...currentAnimation.keyframes, ...keyframesWithTracks]
         };
         updatedAnim.duration = calculateDuration(updatedAnim.keyframes);
 
@@ -76,7 +80,10 @@ export const useKeyframeOperations = ({
         };
 
         updateProject(updatedProject);
-        setSelectedKeyframeId(newKeyframe.id);
+        // 选中第一个关键帧
+        if (keyframesWithTracks.length > 0) {
+            setSelectedKeyframeId(keyframesWithTracks[0].id);
+        }
     }, [currentAnimation, project, selectedAnimationId, currentTime, selectedLightIds, updateProject, setSelectedKeyframeId, toast]);
 
     const handleUpdateKeyframe = useCallback((kfId: string, updates: Partial<Keyframe>) => {
