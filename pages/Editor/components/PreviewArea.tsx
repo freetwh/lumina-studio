@@ -147,7 +147,7 @@ export const PreviewArea = forwardRef<HTMLDivElement, PreviewAreaProps>(({
       >
         <div 
           className={cn(
-              "relative border rounded-lg bg-background/50 shadow-inner pointer-events-none",
+              "relative rounded-lg pointer-events-none",
               isSpacePressed ? "cursor-grab" : "cursor-crosshair"
           )}
           style={{ 
