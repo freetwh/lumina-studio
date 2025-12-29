@@ -8,22 +8,55 @@ import { Keyframe } from '../../../types';
 interface InspectorProps {
   selectedKeyframeId: string | null;
   currentKeyframe?: Keyframe;
+  selectedKeyframeIds: Set<string>;
+  selectedKeyframesSpanMs: number;
   onUpdateKeyframe: (id: string, updates: Partial<Keyframe>) => void;
   onDuplicate: () => void;
   onDelete: () => void;
+  onBatchSetTotalDuration: (totalMs: number) => void;
 }
 
 export const Inspector: React.FC<InspectorProps> = ({ 
   selectedKeyframeId, 
   currentKeyframe, 
+  selectedKeyframeIds,
+  selectedKeyframesSpanMs,
   onUpdateKeyframe, 
   onDuplicate, 
-  onDelete 
+  onDelete,
+  onBatchSetTotalDuration
 }) => {
+  const isBatch = selectedKeyframeIds.size > 1;
+
   return (
     <div className="w-72 border-l bg-card p-4 overflow-y-auto shrink-0">
        <h3 className="font-semibold mb-4">属性面板</h3>
-       {selectedKeyframeId && currentKeyframe ? (
+       {isBatch ? (
+           <div className="space-y-4">
+               <div className="text-xs text-muted-foreground">
+                   已选中 {selectedKeyframeIds.size} 个关键帧
+               </div>
+
+               <div className="space-y-2">
+                   <Label>总时长 (毫秒)</Label>
+                   <Input
+                       type="number"
+                       min={1}
+                       value={selectedKeyframesSpanMs}
+                       onChange={(e) => onBatchSetTotalDuration(Number(e.target.value))}
+                   />
+                   <div className="text-xs text-muted-foreground">
+                       修改后会按比例缩放每个选中关键帧的 startTime 与 duration（以最早开始时间为基准）。
+                   </div>
+               </div>
+
+               <div className="flex gap-2 pt-4 border-t">
+                   <Button variant="destructive" size="sm" onClick={onDelete}>
+                       <Trash2 className="w-3 h-3 mr-2" /> 删除全部
+                   </Button>
+               </div>
+           </div>
+       ) : (selectedKeyframeId && currentKeyframe ? (
            <div className="space-y-4">
                <div className="text-xs text-muted-foreground mb-2">关键帧 ID: {selectedKeyframeId.slice(0,8)}</div>
                
@@ -107,7 +140,7 @@ export const Inspector: React.FC<InspectorProps> = ({
            </div>
        ) : (
            <div className="text-sm text-muted-foreground">请选择关键帧以编辑属性。</div>
-       )}
+       ))}
     </div>
   );
 };

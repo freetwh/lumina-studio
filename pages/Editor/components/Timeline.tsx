@@ -7,18 +7,21 @@
  * - 处理动画 CRUD
  */
 
-import React, { forwardRef, useState, useRef, useEffect, useMemo } from 'react';
+import React, { forwardRef, useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Play, Pause, Square, RotateCw, Plus, Undo2, Redo2, GripVertical, Trash2, Save, PenLine } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { cn } from '../../../components/ui/utils';
 import { Project, AnimationNode, Keyframe } from '../../../types';
 import { generateId } from '../../../utils';
 import { useKeyframeDrag } from '../hooks/useKeyframeDrag';
+import { useTimelineSelection } from '../hooks/useTimelineSelection';
 
 interface TimelineProps {
   project: Project | null;
   currentTime: number;
   selectedAnimationId: string;
+  selectedKeyframeId: string | null;
+  selectedKeyframeIds: Set<string>;
   isPlaying: boolean;
   isLooping: boolean;
   canUndo: boolean;
@@ -27,6 +30,7 @@ interface TimelineProps {
   onTimeChange: (time: number) => void;
   onAnimationSelect: (id: string) => void;
   onProjectUpdate: (project: Project) => void;
+  onSelectedKeyframeIdsChange: (ids: Set<string>) => void;
   onKeyframeSelect?: (keyframeId: string, lightIds: string[]) => void;
   onPlayPause: () => void;
   onStop: () => void;
@@ -45,6 +49,8 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
   project,
   currentTime,
   selectedAnimationId,
+  selectedKeyframeId,
+  selectedKeyframeIds,
   isPlaying,
   isLooping,
   canUndo,
@@ -52,6 +58,7 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
   onTimeChange,
   onAnimationSelect,
   onProjectUpdate,
+  onSelectedKeyframeIdsChange,
   onKeyframeSelect,
   onPlayPause,
   onStop,
@@ -65,7 +72,6 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
   const [zoom, setZoom] = useState(1);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; animId: string } | null>(null);
   const [draggedItemIdx, setDraggedItemIdx] = useState<number | null>(null);
-  const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
   
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const timelineRef = useRef<HTMLDivElement>(null);
@@ -75,13 +81,37 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
     return project?.animations.find(a => a.id === selectedAnimationId);
   }, [project, selectedAnimationId]);
 
+  // ========== 框选逻辑 ==========
+  const { selectionBox, handleTimelineMouseDown } = useTimelineSelection({
+    currentAnimation,
+    zoom,
+    pixelsPerSec: PIXELS_PER_SEC,
+    trackHeight: TRACK_HEIGHT,
+    selectedKeyframeIds,
+    onSelectionChange: (ids) => {
+        onSelectedKeyframeIdsChange(ids);
+        if (!currentAnimation) return;
+
+        // 尽量保持 primary 不变，否则选第一个
+        const primaryId = (selectedKeyframeId && ids.has(selectedKeyframeId))
+          ? selectedKeyframeId
+          : (ids.size > 0 ? Array.from(ids)[0] : null);
+
+        if (primaryId && onKeyframeSelect) {
+            const kf = currentAnimation.keyframes.find(k => k.id === primaryId);
+            if (kf) onKeyframeSelect(primaryId, kf.targetLightIds);
+        }
+    }
+  });
+
   // ========== 关键帧拖拽（复用 Hook）==========
-  const handleKeyframeDragComplete = (keyframeId: string, newStartTime: number, newTrackId: number) => {
+  const handleKeyframesDragComplete = useCallback((updates: { id: string; startTime: number; trackId: number }[]) => {
       if (!currentAnimation || !project) return;
       
-      const updatedKeyframes = currentAnimation.keyframes.map(k => 
-          k.id === keyframeId ? { ...k, startTime: newStartTime, trackId: newTrackId } : k
-      );
+      const updatedKeyframes = currentAnimation.keyframes.map(k => {
+          const update = updates.find(u => u.id === k.id);
+          return update ? { ...k, startTime: update.startTime, trackId: update.trackId } : k;
+      });
       
       const updatedProject = {
           ...project,
@@ -91,19 +121,17 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
       };
 
       onProjectUpdate(updatedProject);
+  }, [project, currentAnimation, selectedAnimationId, onProjectUpdate]);
+
+  const handleKeyframeSelectFromDrag = (keyframeId: string, targetLightIds: string[], e?: React.MouseEvent) => {
+      handleSelectKeyframe(keyframeId, e);
   };
 
-  const handleKeyframeSelectFromDrag = (keyframeId: string, targetLightIds: string[]) => {
-      setSelectedKeyframeId(keyframeId);
-      if (onKeyframeSelect) {
-          onKeyframeSelect(keyframeId, targetLightIds);
-      }
-  };
-
-  const { dragGhost, handleKeyframeMouseDown } = useKeyframeDrag(
+  const { dragGhosts, handleKeyframeMouseDown } = useKeyframeDrag(
       currentAnimation,
       zoom,
-      handleKeyframeDragComplete,
+      selectedKeyframeIds,
+      handleKeyframesDragComplete,
       handleKeyframeSelectFromDrag
   );
 
@@ -193,12 +221,25 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
   };
 
   // ========== 关键帧选择 ==========
-  const handleSelectKeyframe = (id: string) => {
-      setSelectedKeyframeId(id);
-      const kf = currentAnimation?.keyframes.find(k => k.id === id);
-      if (kf && onKeyframeSelect) {
-          onKeyframeSelect(id, kf.targetLightIds);
+  const handleSelectKeyframe = (id: string, e?: React.MouseEvent) => {
+      let next: Set<string>;
+      if (e?.shiftKey) {
+          next = new Set(selectedKeyframeIds);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+      } else {
+          // 如果点击的已经在选区内，不重置选区，方便拖拽
+          if (selectedKeyframeIds.has(id)) {
+              next = selectedKeyframeIds;
+          } else {
+              next = new Set([id]);
+          }
       }
+      onSelectedKeyframeIdsChange(next);
+      
+      const primaryId = next.has(id) ? id : (Array.from(next)[0] || null);
+      const kf = currentAnimation?.keyframes.find(k => k.id === primaryId);
+      if (kf && onKeyframeSelect) onKeyframeSelect(primaryId, kf.targetLightIds);
   };
 
   // ========== 单个动画播放 ==========
@@ -303,7 +344,21 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
               className="flex-1 overflow-x-auto relative cursor-pointer" 
               ref={timelineRef} 
               onClick={handleTimelineClick}
+              onMouseDown={(e) => handleTimelineMouseDown(e, timelineRef)}
             >
+                {/* Selection Box */}
+                {selectionBox && (
+                    <div 
+                        className="absolute border-2 border-primary bg-primary/10 pointer-events-none z-50 rounded-sm"
+                        style={{
+                            left: selectionBox.x,
+                            top: selectionBox.y,
+                            width: selectionBox.w,
+                            height: selectionBox.h
+                        }}
+                    />
+                )}
+
                 {/* 播放指针 */}
                 <div 
                   className="absolute top-0 bottom-0 bg-red-500/50 w-[1px] z-20 pointer-events-none"
@@ -325,35 +380,39 @@ export const Timeline = forwardRef<HTMLDivElement, TimelineProps>(({
                          <div key={trackIdx} className="w-full border-b border-dashed border-border/30 relative" style={{ height: TRACK_HEIGHT }}>
                              <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground/30 pointer-events-none">轨道 {trackIdx}</span>
                              
-                             {/* Drag Ghost */}
-                             {dragGhost && dragGhost.trackId === trackIdx && (
-                                <div
-                                    className="absolute top-1 bottom-1 rounded border-2 border-dashed border-primary bg-primary/40 shadow-[0_0_10px_rgba(var(--primary),0.3)] z-30 pointer-events-none"
-                                    style={{
-                                       left: `${(dragGhost.startTime / 1000) * PIXELS_PER_SEC * zoom}px`,
-                                       width: `${(dragGhost.duration / 1000) * PIXELS_PER_SEC * zoom}px`
-                                    }}
-                                >
-                                    <div className="absolute -top-5 left-0 text-[10px] font-bold bg-primary text-primary-foreground px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap z-40">
-                                        {(dragGhost.startTime / 1000).toFixed(2)}s
+                             {/* Drag Ghosts */}
+                             {dragGhosts && Array.from(dragGhosts.entries())
+                                .filter(([_, g]) => g.trackId === trackIdx)
+                                .map(([id, g]) => (
+                                    <div
+                                        key={`ghost-${id}`}
+                                        className="absolute top-1 bottom-1 rounded border-2 border-dashed border-primary bg-primary/40 shadow-[0_0_10px_rgba(var(--primary),0.3)] z-30 pointer-events-none"
+                                        style={{
+                                           left: `${(g.startTime / 1000) * PIXELS_PER_SEC * zoom}px`,
+                                           width: `${(g.duration / 1000) * PIXELS_PER_SEC * zoom}px`
+                                        }}
+                                    >
+                                        <div className="absolute -top-5 left-0 text-[10px] font-bold bg-primary text-primary-foreground px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap z-40">
+                                            {(g.startTime / 1000).toFixed(2)}s
+                                        </div>
                                     </div>
-                                </div>
-                             )}
+                                ))
+                             }
 
                              {currentAnimation?.keyframes.filter(k => k.trackId === trackIdx).map(k => (
                                  <div
                                    key={k.id}
                                    className={cn(
-                                       "absolute top-1 bottom-1 rounded border overflow-hidden cursor-move group select-none transition-opacity duration-200",
-                                       selectedKeyframeId === k.id ? "bg-blue-600 border-blue-400 z-10 shadow-sm" : "bg-secondary border-primary/20",
-                                       (dragGhost && selectedKeyframeId === k.id) ? "opacity-40" : "opacity-100"
+                                       "absolute top-1 bottom-1 rounded border overflow-hidden cursor-move group select-none transition-opacity duration-200 keyframe-item",
+                                       selectedKeyframeIds.has(k.id) ? "bg-blue-600 border-blue-400 z-10 shadow-sm" : "bg-secondary border-primary/20",
+                                       (dragGhosts && selectedKeyframeIds.has(k.id)) ? "opacity-40" : "opacity-100"
                                    )}
                                    style={{
                                        left: `${(k.startTime / 1000) * PIXELS_PER_SEC * zoom}px`,
                                        width: `${(k.duration / 1000) * PIXELS_PER_SEC * zoom}px`
                                    }}
                                    onMouseDown={(e) => handleKeyframeMouseDown(e, k)}
-                                   onClick={(e) => { e.stopPropagation(); handleSelectKeyframe(k.id); }}
+                                   onClick={(e) => { e.stopPropagation(); handleSelectKeyframe(k.id, e); }}
                                  >
                                      <div className="w-full h-full opacity-50" style={{ backgroundColor: k.toState.color }} />
                                      <div className="absolute inset-0 flex items-center justify-center text-[10px] text-white/90 font-mono truncate px-1 font-medium drop-shadow-md">

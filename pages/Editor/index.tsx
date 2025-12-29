@@ -7,7 +7,7 @@
  * 3. 协调各个业务 Hook
  */
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { Button } from '../../components/ui/button';
 import { Dialog } from '../../components/ui/dialog';
@@ -15,6 +15,7 @@ import { Input } from '../../components/ui/input';
 import { Label } from '../../components/ui/label';
 import { useToast } from '../../components/ui/toast-context';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { calculateDuration } from './services/animationCalculator';
 
 // 子组件
 import { EditorToolbar } from './components/EditorToolbar';
@@ -44,6 +45,7 @@ export default function Editor() {
   const [selectedAnimationId, setSelectedAnimationId] = useState<string>('');
   const [selectedLightIds, setSelectedLightIds] = useState<Set<string>>(new Set());
   const [selectedKeyframeId, setSelectedKeyframeId] = useState<string | null>(null);
+  const [selectedKeyframeIds, setSelectedKeyframeIds] = useState<Set<string>>(new Set());
 
   // 弹窗管理
   const {
@@ -68,6 +70,18 @@ export default function Editor() {
   const currentKeyframe = useMemo(() => {
       return currentAnimation?.keyframes.find(k => k.id === selectedKeyframeId);
   }, [currentAnimation, selectedKeyframeId]);
+
+  const selectedKeyframes = useMemo(() => {
+      if (!currentAnimation) return [];
+      return currentAnimation.keyframes.filter(k => selectedKeyframeIds.has(k.id));
+  }, [currentAnimation, selectedKeyframeIds]);
+
+  const selectedKeyframesSpanMs = useMemo(() => {
+      if (selectedKeyframes.length === 0) return 0;
+      const minStart = Math.min(...selectedKeyframes.map(k => k.startTime));
+      const maxEnd = Math.max(...selectedKeyframes.map(k => k.startTime + k.duration));
+      return Math.max(0, maxEnd - minStart);
+  }, [selectedKeyframes]);
 
   // 播放控制
   const {
@@ -141,11 +155,74 @@ export default function Editor() {
       setSelectedLightIds(new Set(lightIds));
   };
 
+  const handleSelectedKeyframeIdsChange = useCallback((ids: Set<string>) => {
+      setSelectedKeyframeIds(ids);
+      if (ids.size === 0) {
+          setSelectedKeyframeId(null);
+      } else if (selectedKeyframeId && ids.has(selectedKeyframeId)) {
+          // keep primary
+      } else {
+          setSelectedKeyframeId(Array.from(ids)[0]);
+      }
+  }, [selectedKeyframeId]);
+
+  const handleDeleteSelectedKeyframes = useCallback(() => {
+      if (!project || !currentAnimation) return;
+      if (selectedKeyframeIds.size === 0) {
+          handleDeleteKeyframe();
+          return;
+      }
+
+      const remainingKeyframes = currentAnimation.keyframes.filter(k => !selectedKeyframeIds.has(k.id));
+      const updatedAnim = { ...currentAnimation, keyframes: remainingKeyframes };
+      updatedAnim.duration = calculateDuration(remainingKeyframes);
+
+      const updatedProject = {
+          ...project,
+          animations: project.animations.map(a => a.id === selectedAnimationId ? updatedAnim : a)
+      };
+      updateProject(updatedProject);
+      setSelectedKeyframeIds(new Set());
+      setSelectedKeyframeId(null);
+  }, [project, currentAnimation, selectedKeyframeIds, selectedAnimationId, updateProject, handleDeleteKeyframe]);
+
+  const handleBatchSetTotalDuration = useCallback((newTotalMs: number) => {
+      if (!project || !currentAnimation) return;
+      if (selectedKeyframeIds.size === 0) return;
+
+      const keyframesToScale = currentAnimation.keyframes.filter(k => selectedKeyframeIds.has(k.id));
+      if (keyframesToScale.length === 0) return;
+
+      const minStart = Math.min(...keyframesToScale.map(k => k.startTime));
+      const maxEnd = Math.max(...keyframesToScale.map(k => k.startTime + k.duration));
+      const oldTotal = Math.max(1, maxEnd - minStart);
+      const nextTotal = Math.max(1, Math.floor(newTotalMs));
+
+      const factor = nextTotal / oldTotal;
+
+      const updatedKeyframes = currentAnimation.keyframes.map(k => {
+          if (!selectedKeyframeIds.has(k.id)) return k;
+          const relativeStart = k.startTime - minStart;
+          const nextStart = Math.round(minStart + relativeStart * factor);
+          const nextDuration = Math.max(1, Math.round(k.duration * factor));
+          return { ...k, startTime: nextStart, duration: nextDuration };
+      });
+
+      const updatedAnim = { ...currentAnimation, keyframes: updatedKeyframes };
+      updatedAnim.duration = calculateDuration(updatedKeyframes);
+
+      const updatedProject = {
+          ...project,
+          animations: project.animations.map(a => a.id === selectedAnimationId ? updatedAnim : a)
+      };
+      updateProject(updatedProject);
+  }, [project, currentAnimation, selectedKeyframeIds, selectedAnimationId, updateProject]);
+
   // 键盘快捷键
   useKeyboardShortcuts({
       onUndo: undo,
       onRedo: redo,
-      onDelete: handleDeleteKeyframe,
+      onDelete: handleDeleteSelectedKeyframes,
       onSpacePress: () => {} // 空格键由 useCanvasPan 内部处理
   });
 
@@ -201,9 +278,12 @@ export default function Editor() {
           <Inspector 
             selectedKeyframeId={selectedKeyframeId}
             currentKeyframe={currentKeyframe}
+            selectedKeyframeIds={selectedKeyframeIds}
+            selectedKeyframesSpanMs={selectedKeyframesSpanMs}
             onUpdateKeyframe={handleUpdateKeyframe}
             onDuplicate={handleDuplicateKeyframe}
-            onDelete={handleDeleteKeyframe}
+            onDelete={handleDeleteSelectedKeyframes}
+            onBatchSetTotalDuration={handleBatchSetTotalDuration}
           />
       </div>
 
@@ -211,6 +291,8 @@ export default function Editor() {
         project={project}
         currentTime={currentTime}
         selectedAnimationId={selectedAnimationId}
+        selectedKeyframeId={selectedKeyframeId}
+        selectedKeyframeIds={selectedKeyframeIds}
         isPlaying={isPlaying}
         isLooping={isLooping}
         canUndo={canUndo}
@@ -218,6 +300,7 @@ export default function Editor() {
         onTimeChange={setCurrentTime}
         onAnimationSelect={setSelectedAnimationId}
         onProjectUpdate={updateProject}
+        onSelectedKeyframeIdsChange={handleSelectedKeyframeIdsChange}
         onKeyframeSelect={handleKeyframeSelect}
         onPlayPause={handlePlayPause}
         onStop={handleStop}
