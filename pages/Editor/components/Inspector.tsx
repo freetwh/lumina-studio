@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Copy, Trash2 } from 'lucide-react';
 import { Button } from '../../../components/ui/button';
 import { Input } from '../../../components/ui/input';
@@ -27,6 +27,22 @@ export const Inspector: React.FC<InspectorProps> = ({
   onBatchSetTotalDuration
 }) => {
   const isBatch = selectedKeyframeIds.size > 1;
+  const [batchTotalDraft, setBatchTotalDraft] = useState<string>('');
+
+  useEffect(() => {
+      if (isBatch) {
+          setBatchTotalDraft(String(selectedKeyframesSpanMs));
+      } else {
+          setBatchTotalDraft('');
+      }
+  }, [isBatch, selectedKeyframesSpanMs]);
+
+  const commitBatchTotal = () => {
+      if (!isBatch) return;
+      const next = Number(batchTotalDraft);
+      if (!Number.isFinite(next) || next <= 0) return;
+      onBatchSetTotalDuration(next);
+  };
 
   return (
     <div className="w-72 border-l bg-card p-4 overflow-y-auto shrink-0">
@@ -39,12 +55,22 @@ export const Inspector: React.FC<InspectorProps> = ({
 
                <div className="space-y-2">
                    <Label>总时长 (毫秒)</Label>
-                   <Input
-                       type="number"
-                       min={1}
-                       value={selectedKeyframesSpanMs}
-                       onChange={(e) => onBatchSetTotalDuration(Number(e.target.value))}
-                   />
+                   <div className="flex gap-2">
+                       <Input
+                           type="number"
+                           min={1}
+                           value={batchTotalDraft}
+                           onChange={(e) => setBatchTotalDraft(e.target.value)}
+                           onBlur={commitBatchTotal}
+                           onKeyDown={(e) => {
+                               if (e.key === 'Enter') {
+                                   e.preventDefault();
+                                   commitBatchTotal();
+                               }
+                           }}
+                       />
+                       <Button className="shrink-0" variant="outline" size="md" onClick={commitBatchTotal}>应用</Button>
+                   </div>
                    <div className="text-xs text-muted-foreground">
                        修改后会按比例缩放每个选中关键帧的 startTime 与 duration（以最早开始时间为基准）。
                    </div>
