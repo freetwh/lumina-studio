@@ -247,17 +247,7 @@ export const generateAnimationKeyframes = (
       keyframes.push({
         id: generateId(),
         trackId,
-        startTime: baseStartTime + segmentDuration,
-        duration: segmentDuration,
-        targetLightIds,
-        animationType: 'fade',
-        fromState: { color, brightness: 1 },
-        toState: { color, brightness: 1 }
-      });
-      keyframes.push({
-        id: generateId(),
-        trackId,
-        startTime: baseStartTime + segmentDuration * 2,
+        startTime: baseStartTime + segmentDuration * 1,
         duration: segmentDuration,
         targetLightIds,
         animationType: 'fade',
